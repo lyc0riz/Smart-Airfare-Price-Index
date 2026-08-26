@@ -1,0 +1,616 @@
+"""Ixigo flight data interceptor using /flights/v2/search/stream SSE endpoint.
+
+Parses the confirmed SSE structure where each flightFare[] entry contains:
+  - flightKeys: "DEL-BOM-AI2977-01092026"
+  - fares[0].fareDetails.displayFare: total fare (no tax breakdown)
+  - fares[0].fareMetadata[0]: seatRemaining, cabinClass
+  - flightDetails[0]: airlineCode, headerTextWeb, subHeaderTextWeb, times, stops
+"""
+
+import json
+import logging
+import re
+import time
+from datetime import datetime, timedelta
+from typing import Any, Optional
+
+import aiohttp
+
+from src.ingestion.interceptors.base import (
+    BaseInterceptor,
+    FlightData,
+    InterceptorConfig,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class IxigoConfig(InterceptorConfig):
+    """Ixigo-specific configuration."""
+
+    base_url: str = "https://www.ixigo.com/flights/v2/search/stream"
+    outlook_url: str = "https://www.ixigo.com/outlook/v1/onward/ranged"
+
+    # Hardcoded client credentials (from portal analysis)
+    API_KEY: str = "ixiweb!2$"
+    CLIENT_ID: str = "ixiweb"
+    IXI_SRC: str = "ixiweb"
+    APP_VERSION: str = "2"
+    WEBAPP_VERSION: str = "2.78.1"
+
+
+class IxigoInterceptor(BaseInterceptor):
+    """Ixigo flight data interceptor.
+
+    Uses the SSE streaming endpoint to fetch real-time flight search results.
+    Two fetch modes:
+    1. aiohttp: Fast but blocked by Cloudflare (403) — used as fallback
+    2. Playwright: Full browser context with stealth — primary mode
+
+    No login required — uses a static API key and generated device ID.
+    """
+
+    def __init__(self, config: Optional[IxigoConfig] = None) -> None:
+        self.ixigo_config = config or IxigoConfig()
+        super().__init__(self.ixigo_config)
+        self._search_id: Optional[str] = None
+        self._playwright = None
+        self._browser = None
+        self._context = None
+        self._page = None
+        self._cf_cookiesEstablished = False
+
+    async def build_search_headers(self) -> dict[str, str]:
+        """Build Ixigo API headers."""
+        return {
+            "apikey": self.ixigo_config.API_KEY,
+            "clientid": self.ixigo_config.CLIENT_ID,
+            "uuid": self._device_id,
+            "deviceid": self._device_id,
+            "ixisrc": self.ixigo_config.IXI_SRC,
+            "appversion": self.ixigo_config.APP_VERSION,
+            "x-request-webappversion": self.ixigo_config.WEBAPP_VERSION,
+            "content-type": "application/json; charset=UTF-8",
+            "accept": "text/event-stream, application/json",
+            "user-agent": self.config.user_agent,
+            "referer": "https://www.ixigo.com/",
+        }
+
+    async def build_search_params(
+        self,
+        origin: str,
+        destination: str,
+        departure_date: str,
+        advance_window: int,
+    ) -> dict[str, str]:
+        """Build Ixigo search query parameters.
+
+        Args:
+            origin: IATA origin code (e.g., 'DEL').
+            destination: IATA destination code (e.g., 'BOM').
+            departure_date: Date in DDMMYYYY format.
+            advance_window: Advance purchase window in days (used for date calc).
+
+        Returns:
+            Query parameters dictionary.
+        """
+        if advance_window > 0:
+            dep_date = datetime.now() + timedelta(days=advance_window)
+            leave = dep_date.strftime("%d%m%Y")
+        else:
+            leave = departure_date
+
+        return {
+            "origin": origin,
+            "destination": destination,
+            "leave": leave,
+            "return": "",
+            "adults": "1",
+            "children": "0",
+            "infants": "0",
+            "class": "e",
+            "airlineFareType": "REGULAR",
+            "version": "2.0",
+            "searchSrc": "Search Form",
+        }
+
+    async def parse_response(
+        self,
+        response: aiohttp.ClientResponse,
+        route: str,
+        advance_window: int,
+    ) -> list[FlightData]:
+        """Parse Ixigo SSE streaming response into FlightData records.
+
+        The endpoint returns a single SSE frame containing all flight data.
+        Each flightFare[] entry in data.flightJourneys[] represents one flight option.
+
+        Args:
+            response: aiohttp response from the SSE endpoint.
+            route: Route string (e.g., 'DEL-BOM').
+            advance_window: Advance purchase window in days.
+
+        Returns:
+            List of FlightData records.
+        """
+        flights: list[FlightData] = []
+        origin, destination = route.split("-")
+
+        # Read the entire SSE response (single frame, ~264KB)
+        buffer = ""
+        async for chunk in response.content.iter_any():
+            buffer += chunk.decode("utf-8", errors="replace")
+
+        # Parse SSE data frames
+        for line in buffer.split("\n"):
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+
+            json_str = line[5:].strip()
+            if not json_str:
+                continue
+
+            try:
+                data = json.loads(json_str)
+                parsed = self._parse_sse_payload(
+                    data, route, origin, destination, advance_window
+                )
+                flights.extend(parsed)
+            except json.JSONDecodeError as e:
+                self.logger.debug(f"Failed to parse SSE data frame: {e}")
+
+        self.logger.info(
+            f"Parsed {len(flights)} flights from Ixigo for {route}"
+        )
+        return flights
+
+    def _parse_sse_payload(
+        self,
+        data: dict[str, Any],
+        route: str,
+        origin: str,
+        destination: str,
+        advance_window: int,
+    ) -> list[FlightData]:
+        """Extract FlightData records from a single SSE payload.
+
+        Navigates: data.flightJourneys[].flightFare[]
+        Each flightFare entry contains flightDetails[0], fares[0], flightKeys.
+
+        Args:
+            data: Parsed JSON from SSE data frame.
+            route: Route string (e.g., 'DEL-BOM').
+            origin: IATA origin code.
+            destination: IATA destination code.
+            advance_window: Advance purchase window in days.
+
+        Returns:
+            List of FlightData records found in this payload.
+        """
+        flights: list[FlightData] = []
+
+        payload_data = data.get("data", data)
+        flight_journeys = payload_data.get("flightJourneys", [])
+
+        for journey in flight_journeys:
+            flight_fares = journey.get("flightFare", [])
+
+            for fare_entry in flight_fares:
+                flight_data = self._parse_flight_fare_entry(
+                    fare_entry, route, origin, destination, advance_window
+                )
+                if flight_data:
+                    flights.append(flight_data)
+
+        return flights
+
+    def _parse_flight_fare_entry(
+        self,
+        fare_entry: dict[str, Any],
+        route: str,
+        origin: str,
+        destination: str,
+        advance_window: int,
+    ) -> Optional[FlightData]:
+        """Parse a single flightFare entry into a FlightData record.
+
+        Expected structure:
+        {
+            "flightKeys": "DEL-BOM-AI2977-01092026",
+            "refundableType": "PARTIALLY_REFUNDABLE",
+            "fares": [{"fareDetails": {"displayFare": 7000}, "fareMetadata": [{"seatRemaining": 0, "cabinClass": "ECONOMY"}]}],
+            "flightDetails": [{"airlineCode": "AI", "headerTextWeb": "Air India", "subHeaderTextWeb": "AI2977", "departureTime": "19:00", "arrivalTime": "21:25", "stop": 0, "duration": {"time": 145}}]
+        }
+
+        Args:
+            fare_entry: Single flightFare dict from Ixigo SSE response.
+            route: Route string.
+            origin: IATA origin code.
+            destination: IATA destination code.
+            advance_window: Advance purchase window in days.
+
+        Returns:
+            FlightData record, or None if parsing fails.
+        """
+        try:
+            # Extract flight details
+            flight_details_list = fare_entry.get("flightDetails", [])
+            if not flight_details_list:
+                return None
+
+            flight_details = flight_details_list[0]
+            airline_code = flight_details.get("airlineCode", "")
+            carrier_name = flight_details.get("headerTextWeb", "")
+            raw_flight_number = flight_details.get("subHeaderTextWeb", "")
+            departure_time = flight_details.get("departureTime", "")
+            arrival_time = flight_details.get("arrivalTime", "")
+            stops = flight_details.get("stop", 0)
+            duration = flight_details.get("duration", {})
+            duration_minutes = duration.get("time") if duration else None
+
+            # Normalize flight number: "AI2977" → "AI-2977"
+            flight_number = self._normalize_flight_number(raw_flight_number)
+
+            # Extract fare info
+            fares_list = fare_entry.get("fares", [])
+            if not fares_list:
+                return None
+
+            fare_details = fares_list[0].get("fareDetails", {})
+            fare_metadata_list = fares_list[0].get("fareMetadata", [])
+
+            total_fare = float(fare_details.get("displayFare", 0))
+            if total_fare <= 0:
+                return None
+
+            # Extract metadata
+            cabin_class = "ECONOMY"
+            seat_remaining = None
+            if fare_metadata_list:
+                meta = fare_metadata_list[0]
+                cabin_class = meta.get("cabinClass", "ECONOMY")
+                seat_raw = meta.get("seatRemaining", 0)
+                # 0 means undisclosed, treat as NULL
+                seat_remaining = seat_raw if seat_raw > 0 else None
+
+            # Extract flight date from flightKeys: "DEL-BOM-AI2977-01092026"
+            flight_date = self._parse_flight_date(
+                fare_entry.get("flightKeys", ""), advance_window
+            )
+
+            # Determine refundable status
+            refundable_type = fare_entry.get("refundableType", "")
+            is_refundable = refundable_type == "REFUNDABLE"
+
+            return FlightData(
+                source="Ixigo",
+                route=route,
+                origin=origin,
+                destination=destination,
+                flight_date=flight_date,
+                carrier_code=airline_code,
+                carrier_name=carrier_name,
+                flight_number=flight_number,
+                fare_class=cabin_class,
+                base_fare=total_fare,  # No tax breakdown available
+                tax_total=0.0,
+                tax_breakdown_available=False,
+                total_fare=total_fare,
+                currency="INR",
+                departure_time=departure_time,
+                arrival_time=arrival_time,
+                stops=stops,
+                duration_minutes=duration_minutes,
+                seat_remaining=seat_remaining,
+                is_refundable=is_refundable,
+                advance_window=advance_window,
+                raw_data=fare_entry,
+            )
+
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            self.logger.debug(f"Failed to parse flightFare entry: {e}")
+            return None
+
+    def _normalize_flight_number(self, raw: str) -> str:
+        """Normalize flight number to XX-NNNN format.
+
+        Examples:
+            "AI2977" → "AI-2977"
+            "6E2054" → "6E-2054"
+            "AI 2977" → "AI-2977"
+
+        Args:
+            raw: Raw flight number string from source.
+
+        Returns:
+            Normalized flight number.
+        """
+        # Remove spaces
+        cleaned = raw.replace(" ", "")
+        # Match: 1-2 alpha/digits + 3-4 digits (handles 6E, AI, SG, etc.)
+        m = re.match(r"^([A-Za-z0-9]{1,2})(\d{3,4})$", cleaned)
+        if m:
+            return f"{m.group(1).upper()}-{m.group(2)}"
+        return cleaned.upper()
+
+    def _parse_flight_date(
+        self, flight_keys, advance_window: int
+    ) -> str:
+        """Parse flight date from flightKeys string or list.
+
+        Example: "DEL-BOM-AI2977-01092026" → "2026-09-01"
+
+        Args:
+            flight_keys: Ixigo flightKeys string or list of strings.
+            advance_window: Fallback advance window for date calculation.
+
+        Returns:
+            Flight date in YYYY-MM-DD format.
+        """
+        # Handle list: extract first element
+        if isinstance(flight_keys, list):
+            flight_keys = flight_keys[0] if flight_keys else ""
+
+        if flight_keys:
+            # Extract date part: last segment after splitting by '-'
+            parts = flight_keys.split("-")
+            if len(parts) >= 4:
+                date_str = parts[-1]  # "01092026"
+                try:
+                    return datetime.strptime(date_str, "%d%m%Y").strftime(
+                        "%Y-%m-%d"
+                    )
+                except ValueError:
+                    pass
+
+        # Fallback: calculate from advance window
+        dep_date = datetime.now() + timedelta(days=advance_window)
+        return dep_date.strftime("%Y-%m-%d")
+
+    async def search_flights_by_date(
+        self,
+        origin: str,
+        destination: str,
+        departure_date: str,
+    ) -> list[FlightData]:
+        """Search flights using a specific date (no advance window calculation).
+
+        Args:
+            origin: IATA origin code.
+            destination: IATA destination code.
+            departure_date: Date in DDMMYYYY format.
+
+        Returns:
+            List of FlightData records.
+        """
+        route = f"{origin}-{destination}"
+        headers = await self.build_search_headers()
+        params = {
+            "origin": origin,
+            "destination": destination,
+            "leave": departure_date,
+            "return": "",
+            "adults": "1",
+            "children": "0",
+            "infants": "0",
+            "class": "e",
+            "airlineFareType": "REGULAR",
+            "version": "2.0",
+            "searchSrc": "Search Form",
+        }
+
+        self.logger.info(f"Searching {route} on Ixigo (date: {departure_date})")
+
+        response = await self._fetch_with_retry(
+            self.ixigo_config.base_url, headers, params
+        )
+        if response is None:
+            return []
+
+        try:
+            return await self.parse_response(response, route, 0)
+        except Exception as e:
+            self.logger.error(f"Parse error for {route}: {e}")
+            return []
+
+    # ─── Playwright-based fetch (primary mode) ───────────────────────────
+
+    async def start_browser(self) -> None:
+        """Launch Playwright browser with stealth for Ixigo."""
+        try:
+            from playwright.async_api import async_playwright
+            from playwright_stealth import Stealth
+        except ImportError as e:
+            self.logger.error(f"Missing Playwright dependencies: {e}")
+            raise
+
+        self._playwright = await async_playwright().start()
+        self._browser = await self._playwright.chromium.launch(headless=True)
+
+        stealth = Stealth()
+        self._context = await self._browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1920, "height": 1080},
+            locale="en-IN",
+        )
+        await stealth.apply_stealth_async(self._context)
+        self._page = await self._context.new_page()
+
+        self.logger.info("Ixigo Playwright browser launched")
+
+    async def stop_browser(self) -> None:
+        """Close Playwright browser."""
+        if self._page:
+            await self._page.close()
+        if self._browser:
+            await self._browser.close()
+        if self._playwright:
+            await self._playwright.stop()
+        self._page = None
+        self._browser = None
+        self._context = None
+        self._playwright = None
+        self._cf_cookiesEstablished = False
+        self.logger.info("Ixigo Playwright browser closed")
+
+    async def _ensure_cf_session(self) -> None:
+        """Establish Cloudflare session by loading an Ixigo page.
+
+        This sets the cf_clearance cookie needed for API calls.
+        """
+        if self._cf_cookiesEstablished:
+            return
+
+        if not self._page:
+            await self.start_browser()
+
+        # Load the Ixigo homepage to get Cloudflare clearance
+        self.logger.info("Establishing Cloudflare session via Ixigo homepage...")
+        try:
+            await self._page.goto(
+                "https://www.ixigo.com",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            import asyncio
+            await asyncio.sleep(3)
+            self._cf_cookiesEstablished = True
+            self.logger.info("Cloudflare session established")
+        except Exception as e:
+            self.logger.warning(f"CF session setup failed: {e}")
+
+    async def search_flights_playwright(
+        self,
+        origin: str,
+        destination: str,
+        departure_date: str,
+        advance_window: int,
+    ) -> list[FlightData]:
+        """Search flights using Playwright browser context.
+
+        Uses page.evaluate(fetch()) to make the SSE request from within
+        the browser, which carries Cloudflare cookies automatically.
+
+        Args:
+            origin: IATA origin code.
+            destination: IATA destination code.
+            departure_date: Date in DDMMYYYY format.
+            advance_window: Advance purchase window in days.
+
+        Returns:
+            List of FlightData records.
+        """
+        route = f"{origin}-{destination}"
+
+        # Calculate departure date
+        if advance_window > 0:
+            dep_date = datetime.now() + timedelta(days=advance_window)
+            leave = dep_date.strftime("%d%m%Y")
+        else:
+            leave = departure_date
+
+        await self._ensure_cf_session()
+
+        # Build the SSE URL with query params
+        params = {
+            "origin": origin,
+            "destination": destination,
+            "leave": leave,
+            "return": "",
+            "adults": "1",
+            "children": "0",
+            "infants": "0",
+            "class": "e",
+            "airlineFareType": "REGULAR",
+            "version": "2.0",
+            "searchSrc": "Search Form",
+        }
+        query_string = "&".join(f"{k}={v}" for k, v in params.items())
+        sse_url = f"{self.ixigo_config.base_url}?{query_string}"
+
+        self.logger.info(f"Searching {route} via Playwright (date: {leave})")
+
+        try:
+            # Use page.evaluate to make fetch from browser context
+            raw_sse = await self._page.evaluate(f"""
+                async () => {{
+                    const resp = await fetch("{sse_url}", {{
+                        headers: {{
+                            "apikey": "{self.ixigo_config.API_KEY}",
+                            "clientid": "{self.ixigo_config.CLIENT_ID}",
+                            "ixisrc": "{self.ixigo_config.IXI_SRC}",
+                            "appversion": "{self.ixigo_config.APP_VERSION}",
+                            "accept": "text/event-stream, application/json",
+                        }},
+                    }});
+                    if (!resp.ok) throw new Error("HTTP " + resp.status);
+                    return await resp.text();
+                }}
+            """)
+
+            # Parse SSE from raw text
+            import io
+            import aiohttp
+
+            # Create a mock response-like object for parse_response
+            # Actually, we can just parse the raw text directly
+            flights = self._parse_sse_text(raw_sse, route, origin, destination, advance_window)
+
+            self.logger.info(
+                f"Playwright search {route}: {len(flights)} flights"
+            )
+            return flights
+
+        except Exception as e:
+            self.logger.error(f"Playwright search failed for {route}: {e}")
+            return []
+
+    def _parse_sse_text(
+        self,
+        raw_text: str,
+        route: str,
+        origin: str,
+        destination: str,
+        advance_window: int,
+    ) -> list[FlightData]:
+        """Parse SSE raw text into FlightData records.
+
+        Same logic as parse_response but works with a raw string
+        instead of an aiohttp response.
+
+        Args:
+            raw_text: Raw SSE response text.
+            route: Route string.
+            origin: IATA origin code.
+            destination: IATA destination code.
+            advance_window: Advance purchase window in days.
+
+        Returns:
+            List of FlightData records.
+        """
+        flights: list[FlightData] = []
+
+        for line in raw_text.split("\n"):
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+
+            json_str = line[5:].strip()
+            if not json_str:
+                continue
+
+            try:
+                data = json.loads(json_str)
+                parsed = self._parse_sse_payload(
+                    data, route, origin, destination, advance_window
+                )
+                flights.extend(parsed)
+            except json.JSONDecodeError as e:
+                self.logger.debug(f"Failed to parse SSE data frame: {e}")
+
+        return flights

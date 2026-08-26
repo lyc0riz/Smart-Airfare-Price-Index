@@ -1,0 +1,109 @@
+{
+  "endpoint": "GET https://www.ixigo.com/flights/v2/search/stream",
+  "content_type": "text/event-stream",
+  "description": "SSE streaming endpoint. Returns a SINGLE frame containing all flight data for the search.",
+  "captured": "2026-08-25T20:15:00Z",
+  "route": "DEL-BOM",
+  "departure_date": "01092026",
+  "total_flights": 129,
+  "structure": {
+    "data": {
+      "type": "SPLIT",
+      "flightJourneys": [
+        {
+          "key": [{"origin": "DEL", "destination": "BOM", "date": "01092026"}],
+          "searchId": "25082026201358196",
+          "journeyFilter": ["<filter metadata>"],
+          "flightFare": [
+            {
+              "flightKeys": "DEL-BOM-AI2977-01092026",
+              "refundableType": "PARTIALLY_REFUNDABLE",
+              "fares": [
+                {
+                  "fareDetails": {
+                    "displayFare": 7000,
+                    "fareToken": "DEL|BOM|010926||1|0|0|e|INR|SEARCHID|ROUTES|false|true|NUMBERS~DISPLAY~..."
+                  },
+                  "fareMetadata": [
+                    {
+                      "seatRemaining": 0,
+                      "baggageDetails": {"checkInBaggage": "15 kg per adult", "handBaggage": "7 kg per adult"},
+                      "cabinClass": "ECONOMY",
+                      "handBaggageOnly": false,
+                      "providerId": 1056,
+                      "fareBasisCode": {"AI2977": "SU1YXR2I"},
+                      "bookingClassByFlightNumber": {"AI2977": "S"}
+                    }
+                  ],
+                  "fareType": "REGULAR",
+                  "fareDisplayText": "Regular Fare",
+                  "priceLockPremium": 1459,
+                  "lockWindow": 8
+                }
+              ],
+              "flightFilter": [
+                {
+                  "stops": 0,
+                  "departTime": "NIGHT",
+                  "arrivalTime": "NIGHT",
+                  "airline": ["AI"],
+                  "departureAirport": "DEL",
+                  "arrivalAirport": "BOM"
+                }
+              ],
+              "sort": {
+                "cheapestRating": 5.7,
+                "fastestRating": 0.967,
+                "earliest": 1140.0,
+                "recommended": 5.7
+              },
+              "flightDetails": [
+                {
+                  "origin": "DEL",
+                  "destination": "BOM",
+                  "duration": {"text": "2h 25m", "time": 145, "timeInHours": 3},
+                  "arrivingInDays": 0,
+                  "departureTime": "19:00",
+                  "arrivalTime": "21:25",
+                  "stopText": "Non-stop",
+                  "stop": 0,
+                  "headerText": "Air India • AI 2977",
+                  "headerTextWeb": "Air India",
+                  "subHeaderTextWeb": "AI2977",
+                  "airlineCode": "AI",
+                  "departureTimeEpoch": 1788269400000,
+                  "arrivalTimeEpoch": 1788278100000,
+                  "layover": []
+                }
+              ],
+              "isFreeMealAvailable": true,
+              "sortedChips": ["FREE_MEAL"],
+              "hasFareFamily": false
+            }
+          ]
+        }
+      ],
+      "tripFilter": {
+        "minPrice": 6179,
+        "maxPrice": 22531,
+        "stopsFilter": [
+          {"stopText": "Non-Stop", "fare": 6408, "count": 61},
+          {"stopText": "1 Stop", "fare": 6179, "count": 68}
+        ],
+        "airlineMap": {
+          "SG": {"name": "SpiceJet", "fare": 6408, "count": 1},
+          "AI": {"name": "Air India", "fare": 7000, "count": 55},
+          "QP": {"name": "Akasa Air", "fare": 6530, "count": 10},
+          "IX": {"name": "Air-India Express", "fare": 6529, "count": 9},
+          "6E": {"name": "IndiGo", "fare": 6179, "count": 54}
+        }
+      }
+    }
+  },
+  "notes": {
+    "fare_breakdown": "NOT available in search results. displayFare is total fare (base + taxes). Tax breakdown requires a separate fare-details API call with fareToken.",
+    "fare_token": "Encoded string containing internal IDs and fare numbers. The tilde-separated numbers at the end appear to be: [internalId, displayFare, totalWithTaxes, totalWithTaxes2, baseComponent, uuid]. Not fully reverse-engineered.",
+    "single_frame": "Despite being SSE, the entire response comes in ONE frame (~264KB). Not a true stream.",
+    "airlines_in_response": "SG (SpiceJet), AI (Air India), QP (Akasa Air), IX (Air India Express), 6E (IndiGo)"
+  }
+}

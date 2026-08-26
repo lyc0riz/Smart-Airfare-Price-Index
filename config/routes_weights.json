@@ -1,0 +1,58 @@
+{
+  "routes": {
+    "DEL-BOM": {
+      "weight": 0.28,
+      "origin": "DEL",
+      "destination": "BOM",
+      "origin_name": "Delhi",
+      "destination_name": "Mumbai"
+    },
+    "DEL-BLR": {
+      "weight": 0.20,
+      "origin": "DEL",
+      "destination": "BLR",
+      "origin_name": "Delhi",
+      "destination_name": "Bengaluru"
+    },
+    "BOM-BLR": {
+      "weight": 0.16,
+      "origin": "BOM",
+      "destination": "BLR",
+      "origin_name": "Mumbai",
+      "destination_name": "Bengaluru"
+    },
+    "DEL-CCU": {
+      "weight": 0.14,
+      "origin": "DEL",
+      "destination": "CCU",
+      "origin_name": "Delhi",
+      "destination_name": "Kolkata"
+    },
+    "BLR-HYD": {
+      "weight": 0.12,
+      "origin": "BLR",
+      "destination": "HYD",
+      "origin_name": "Bengaluru",
+      "destination_name": "Hyderabad"
+    },
+    "MAA-DEL": {
+      "weight": 0.10,
+      "origin": "MAA",
+      "destination": "DEL",
+      "origin_name": "Chennai",
+      "destination_name": "Delhi"
+    }
+  },
+  "advance_windows_days": [1, 7, 15, 30, 45],
+  "airlines": {
+    "6E": "IndiGo",
+    "AI": "Air India",
+    "IX": "Air India Express",
+    "QP": "Akasa Air",
+    "SG": "SpiceJet"
+  },
+  "target_portals": [
+    "Ixigo",
+    "Google Flights"
+  ]
+}
