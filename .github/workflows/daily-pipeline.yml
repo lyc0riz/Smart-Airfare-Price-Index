@@ -42,7 +42,18 @@ jobs:
         run: playwright install chromium
 
       - name: Verify Playwright installation
-        run: python -c "from playwright.async_api import async_playwright; import asyncio; asyncio.run(async_playwright().start().chromium.launch(headless=True).close())"
+        run: |
+          python - <<'EOF'
+          import asyncio
+          from playwright.async_api import async_playwright
+
+          async def main():
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(headless=True)
+                  await browser.close()
+
+          asyncio.run(main())
+          EOF
 
       - name: Run APIx Daily Pipeline
         env:
