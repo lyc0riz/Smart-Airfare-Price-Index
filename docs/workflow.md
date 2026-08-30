@@ -7,7 +7,7 @@ The Real-Time Airfare Price Index (APIx) system implements a **hybrid parametric
 ### Core Design Principles
 
 - **Ethical scraping**: robots.txt compliance, 1 req/sec/domain, custom User-Agent (`MoSPI-APIx-Research-Bot/1.0`), research exemption logging
-- **Dual-source ingestion**: Ixigo (SSE API via Playwright token harvesting) + Google Flights (DOM extraction via Playwright)
+- **Dual-source ingestion**: Ixigo (SSE API via FlareSolverr Cloudflare clearance cookies, Playwright fallback) + Google Flights (DOM extraction via Playwright)
 - **Batch Supabase upsert**: Async PostgreSQL with `ON CONFLICT DO UPDATE` for idempotent deduplication
 - **Jevons → Laspeyres index**: Geometric mean elementary aggregates → weighted Laspeyres price index
 - **Truth Triangle validation**: Cross-source fare parity check (1% tolerance, Ixigo-preferred)

@@ -40,7 +40,42 @@ SUPABASE_DB_URL=postgresql://postgres.xxx:password@aws-0-ap-northeast-1.pooler.s
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# FlareSolverr (Cloudflare challenge solver) — optional, default localhost:8191
+FLARESOLVERR_URL=http://localhost:8191
+FLARESOLVERR_TIMEOUT=60
+FLARESOLVERR_REQUIRED=false
 ```
+
+## FlareSolverr (Ixigo Cloudflare bypass)
+
+Ixigo is protected by Cloudflare, which blocks headless Chromium on cloud
+runner IPs (GitHub Actions). To fetch Ixigo data, the pipeline uses
+**FlareSolverr**, a self-hosted Docker service that solves the Cloudflare JS
+challenge and returns a `cf_clearance` cookie, which is then replayed against
+Ixigo's SSE API.
+
+### In CI (GitHub Actions)
+
+`daily-pipeline.yml` already declares a `flaresolverr` job service and sets
+`FLARESOLVERR_URL: http://flaresolverr:8191` — no secret required.
+
+### Local development
+
+Run FlareSolverr locally (requires Docker):
+```bash
+docker run -p 8191:8191 -e LOG_LEVEL=info ghcr.io/flaresolverr/flaresolverr:latest
+```
+Then leave `FLARESOLVERR_URL` as `http://localhost:8191` or set it to your
+instance.
+
+### Fallback behavior
+
+- If FlareSolverr returns cookies, Ixigo is fetched via direct aiohttp calls.
+- If FlareSolverr is unreachable/returns no data, the pipeline falls back to
+  the Playwright browser context.
+- Set `FLARESOLVERR_REQUIRED=true` to abort the run if FlareSolverr is missing
+  (not recommended for CI graceful degradation).
 
 ## Workflow Schedule
 

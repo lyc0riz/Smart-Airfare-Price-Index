@@ -99,7 +99,10 @@ async def run_daily_pipeline(settings) -> dict:
 
     # 1. Ingestion (quotes persisted inside the fetcher)
     fetch_summary = await run_fetch(
-        rate_limit=settings.RATE_LIMIT_PER_SECOND
+        rate_limit=settings.RATE_LIMIT_PER_SECOND,
+        flaresolverr_url=settings.FLARESOLVERR_URL,
+        flaresolverr_timeout=settings.FLARESOLVERR_TIMEOUT,
+        flaresolverr_required=settings.FLARESOLVERR_REQUIRED,
     )
     logger.info(
         f"Ingestion: {fetch_summary['successes']}/{fetch_summary['total_queries']} "

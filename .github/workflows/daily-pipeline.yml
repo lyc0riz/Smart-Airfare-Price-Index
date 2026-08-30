@@ -17,6 +17,14 @@ jobs:
       actions: write
       issues: write
 
+    services:
+      flaresolverr:
+        image: ghcr.io/flaresolverr/flaresolverr:latest
+        ports:
+          - 8191:8191
+        options: >-
+          --shm-size=1g
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -61,6 +69,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FLARESOLVERR_URL: http://flaresolverr:8191
+          FLARESOLVERR_REQUIRED: "false"
           LOG_LEVEL: INFO
         run: |
           python main.py

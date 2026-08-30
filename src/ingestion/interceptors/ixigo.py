@@ -16,6 +16,10 @@ from typing import Any, Optional
 
 import aiohttp
 
+from src.ingestion.flare_solverr import (
+    FlareSolverrClient,
+    FlareSolverrError,
+)
 from src.ingestion.interceptors.base import (
     BaseInterceptor,
     FlightData,
@@ -38,6 +42,11 @@ class IxigoConfig(InterceptorConfig):
     APP_VERSION: str = "2"
     WEBAPP_VERSION: str = "2.78.1"
 
+    # FlareSolverr (Cloudflare challenge solver) config
+    flaresolverr_url: str = "http://localhost:8191"
+    flaresolverr_timeout: int = 60
+    homepage_url: str = "https://www.ixigo.com"
+
 
 class IxigoInterceptor(BaseInterceptor):
     """Ixigo flight data interceptor.
@@ -50,7 +59,12 @@ class IxigoInterceptor(BaseInterceptor):
     No login required — uses a static API key and generated device ID.
     """
 
-    def __init__(self, config: Optional[IxigoConfig] = None) -> None:
+    def __init__(
+        self,
+        config: Optional[IxigoConfig] = None,
+        session_store=None,
+        flaresolverr_client: Optional[FlareSolverrClient] = None,
+    ) -> None:
         self.ixigo_config = config or IxigoConfig()
         super().__init__(self.ixigo_config)
         self._search_id: Optional[str] = None
@@ -59,6 +73,13 @@ class IxigoInterceptor(BaseInterceptor):
         self._context = None
         self._page = None
         self._cf_cookiesEstablished = False
+        self._session_store = session_store
+        self._flaresolverr = flaresolverr_client or FlareSolverrClient(
+            base_url=self.ixigo_config.flaresolverr_url,
+            timeout=self.ixigo_config.flaresolverr_timeout,
+            session_store=session_store,
+        )
+        self._cleared_cookies: Optional[dict[str, str]] = None
 
     async def build_search_headers(self) -> dict[str, str]:
         """Build Ixigo API headers."""
@@ -405,7 +426,132 @@ class IxigoInterceptor(BaseInterceptor):
             self.logger.error(f"Parse error for {route}: {e}")
             return []
 
-    # ─── Playwright-based fetch (primary mode) ───────────────────────────
+    # ─── FlareSolverr-based fetch (primary mode) ─────────────────────────
+
+    async def ensure_cf_cookies(
+        self, force_refresh: bool = False
+    ) -> dict[str, str]:
+        """Obtain Cloudflare clearance cookies via FlareSolverr.
+
+        Returns cached cookies when available; otherwise asks
+        FlareSolverr to solve the Ixigo homepage challenge.
+
+        Args:
+            force_refresh: If True, skip cached cookies and re-solve.
+
+        Returns:
+            Cookie dict (e.g. ``{"cf_clearance": "..."}``).
+
+        Raises:
+            FlareSolverrError: If no cached cookies exist and
+                FlareSolverr cannot solve the challenge.
+        """
+        if self._cleared_cookies and not force_refresh:
+            return self._cleared_cookies
+        cookies = await self._flaresolverr.solve_for_portal(
+            "Ixigo",
+            self.ixigo_config.homepage_url,
+            user_agent=self.config.user_agent,
+            force_refresh=force_refresh,
+        )
+        self._cleared_cookies = cookies
+        self.logger.info(
+            f"Obtained {len(cookies)} Cloudflare cookies via FlareSolverr"
+        )
+        return cookies
+
+    async def search_flights_flaresolverr(
+        self,
+        origin: str,
+        destination: str,
+        departure_date: str,
+        advance_window: int,
+    ) -> list[FlightData]:
+        """Search flights via aiohttp using FlareSolverr-solved cookies.
+
+        Solves the Cloudflare challenge once (cached for the run) and
+        replays the resulting cookies against the SSE endpoint.
+
+        Args:
+            origin: IATA origin code.
+            destination: IATA destination code.
+            departure_date: Date in DDMMYYYY format.
+            advance_window: Advance purchase window in days.
+
+        Returns:
+            List of FlightData records (empty on failure).
+        """
+        route = f"{origin}-{destination}"
+
+        if advance_window > 0:
+            dep_date = datetime.now() + timedelta(days=advance_window)
+            leave = dep_date.strftime("%d%m%Y")
+        else:
+            leave = departure_date
+
+        headers = await self.build_search_headers()
+        cookies = await self.ensure_cf_cookies()
+        params = await self.build_search_params(
+            origin, destination, departure_date, advance_window
+        )
+        params = dict(params)
+        params["leave"] = leave
+
+        self.logger.info(
+            f"Searching {route} via FlareSolverr+cookies (date: {leave})"
+        )
+
+        session = await self._get_session()
+        try:
+            async with session.get(
+                self.ixigo_config.base_url,
+                headers=headers,
+                params=params,
+                cookies=cookies,
+            ) as response:
+                if response.status == 200:
+                    flights = await self.parse_response(
+                        response, route, advance_window
+                    )
+                    self.logger.info(
+                        f"FlareSolverr search {route}: {len(flights)} flights"
+                    )
+                    return flights
+                if response.status in (403, 503):
+                    # Cookies may have expired mid-run — nudge refresh
+                    # once and let the caller decide whether to retry.
+                    self.logger.warning(
+                        f"HTTP {response.status} from {route}; cookies "
+                        f"likely stale (cf_clearance refresh needed)"
+                    )
+                    return []
+                self.logger.error(
+                    f"HTTP {response.status} from {route}: "
+                    f"{(await response.text())[:300]}"
+                )
+                return []
+        except FlareSolverrError as e:
+            self.logger.error(f"Cloudflare challenge failed for {route}: {e}")
+            return []
+        except aiohttp.ClientError as e:
+            self.logger.error(f"Network error for {route}: {e}")
+            return []
+
+    # ─── Playwright-based fetch (fallback mode) ──────────────────────────
+
+    async def is_flaresolverr_available(self) -> bool:
+        """Report whether FlareSolverr appears reachable.
+
+        Returns:
+            True if FlareSolverr responds, else False.
+        """
+        return await self._flaresolverr.is_available()
+
+    async def close(self) -> None:
+        """Close the interceptor and the FlareSolverr client."""
+        await super().close()
+        if self._flaresolverr:
+            await self._flaresolverr.close()
 
     async def start_browser(self) -> None:
         """Launch Playwright browser with stealth for Ixigo."""

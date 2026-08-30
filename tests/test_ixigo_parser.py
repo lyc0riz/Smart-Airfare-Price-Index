@@ -4,7 +4,9 @@ import json
 
 import pytest
 from datetime import date
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from src.ingestion.flare_solverr import FlareSolverrError
 from src.ingestion.interceptors.ixigo import IxigoInterceptor
 
 
@@ -155,3 +157,113 @@ class TestIxigoInterceptor:
         assert f.stops == 1
         assert f.total_fare == 13748.0
         assert f.is_sold_out is False
+
+
+class TestIxigoFlareSolverr:
+    @pytest.fixture
+    def ixigo_fs(self):
+        return IxigoInterceptor()
+
+    @pytest.mark.asyncio
+    async def test_ensure_cf_cookies_solves_once(self, ixigo_fs):
+        ixigo_fs._cleared_cookies = None
+        ixigo_fs._flaresolverr.solve_for_portal = AsyncMock(
+            return_value={"cf_clearance": "abc"}
+        )
+
+        cookies = await ixigo_fs.ensure_cf_cookies()
+        assert cookies == {"cf_clearance": "abc"}
+        # Second call uses the cleared cookie cache (no re-solve)
+        await ixigo_fs.ensure_cf_cookies()
+        ixigo_fs._flaresolverr.solve_for_portal.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ensure_cf_cookies_force_refresh(self, ixigo_fs):
+        ixigo_fs._cleared_cookies = {"cf_clearance": "old"}
+        ixigo_fs._flaresolverr.solve_for_portal = AsyncMock(
+            return_value={"cf_clearance": "new"}
+        )
+
+        cookies = await ixigo_fs.ensure_cf_cookies(force_refresh=True)
+        assert cookies == {"cf_clearance": "new"}
+
+    @pytest.mark.asyncio
+    async def test_is_flaresolverr_available_delegates(self, ixigo_fs):
+        ixigo_fs._flaresolverr.is_available = AsyncMock(return_value=True)
+        assert await ixigo_fs.is_flaresolverr_available() is True
+
+    @pytest.mark.asyncio
+    async def test_search_flaresolverr_success(self, ixigo_fs):
+        # Build a small valid SSE payload
+        payload = _make_sse_payload([{
+            "flightDetails": [{
+                "airlineCode": "6E",
+                "headerTextWeb": "IndiGo",
+                "subHeaderTextWeb": "6E101",
+                "departureTime": "08:30",
+                "arrivalTime": "10:45",
+                "duration": {"time": 135},
+                "stop": 0,
+            }],
+            "fares": [{
+                "fareDetails": {"displayFare": 5750},
+                "fareMetadata": [{"cabinClass": "ECONOMY", "seatRemaining": 12}],
+            }],
+            "flightKeys": ["DEL-BOM-6E101-01092026"],
+        }])
+        sse_body = f"data: {payload}"
+
+        ixigo_fs.ensure_cf_cookies = AsyncMock(
+            return_value={"cf_clearance": "abc"}
+        )
+
+        class FakeContent:
+            def __init__(self, body):
+                self._body = body.encode()
+
+            async def iter_any(self):
+                yield self._body
+
+        resp = AsyncMock()
+        resp.status = 200
+        resp.content = FakeContent(sse_body)
+        get_cm = AsyncMock()
+        get_cm.__aenter__.return_value = resp
+        get_cm.__aexit__.return_value = False
+
+        session = MagicMock()
+        session.get.return_value = get_cm
+
+        with patch("src.ingestion.interceptors.ixigo.IxigoInterceptor._get_session",
+                   new=AsyncMock(return_value=session)):
+            flights = await ixigo_fs.search_flights_flaresolverr(
+                "DEL", "BOM", "01092026", 7
+            )
+
+        assert len(flights) == 1
+        assert flights[0].carrier_code == "6E"
+        assert flights[0].total_fare == 5750.0
+
+    @pytest.mark.asyncio
+    async def test_search_flaresolverr_403_returns_empty(self, ixigo_fs):
+        ixigo_fs.ensure_cf_cookies = AsyncMock(
+            return_value={"cf_clearance": "stale"}
+        )
+
+        resp = AsyncMock()
+        resp.status = 403
+        resp.text = AsyncMock(return_value="Forbidden")
+        get_cm = AsyncMock()
+        get_cm.__aenter__.return_value = resp
+        get_cm.__aexit__.return_value = False
+
+        session = MagicMock()
+        session.get.return_value = get_cm
+
+        with patch("src.ingestion.interceptors.ixigo.IxigoInterceptor._get_session",
+                   new=AsyncMock(return_value=session)):
+            flights = await ixigo_fs.search_flights_flaresolverr(
+                "DEL", "BOM", "01092026", 7
+            )
+
+        assert flights == []

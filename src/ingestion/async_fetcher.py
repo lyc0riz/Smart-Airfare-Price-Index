@@ -46,6 +46,9 @@ class AsyncFetcher:
         rate_limit_per_sec: float = 1.0,
         sources: Optional[list[str]] = None,
         persist_to_supabase: bool = True,
+        flaresolverr_url: Optional[str] = None,
+        flaresolverr_timeout: int = 60,
+        flaresolverr_required: bool = False,
     ) -> None:
         """Initialize async fetcher.
 
@@ -57,6 +60,11 @@ class AsyncFetcher:
             rate_limit_per_sec: Max requests per second per source.
             sources: List of source names to use. Default: ["Ixigo", "Google Flights"].
             persist_to_supabase: Whether to upsert flight quotes to Supabase.
+            flaresolverr_url: Override FlareSolverr service URL.
+            flaresolverr_timeout: FlareSolverr challenge-solve timeout (sec).
+            flaresolverr_required: If True and "Ixigo" in sources, abort if
+                FlareSolverr is unavailable (fail loudly instead of silently
+                degrading to the Playwright path).
         """
         self.session_store = session_store or SessionStore()
         self.raw_sink = raw_sink or RawSink()
@@ -65,13 +73,19 @@ class AsyncFetcher:
         self.persist_to_supabase = persist_to_supabase
         self.rate_limit_per_sec = rate_limit_per_sec
         self.sources = sources or ["Ixigo", "Google Flights"]
+        self.flaresolverr_required = flaresolverr_required
 
         # Configure interceptors
         ixigo_config = IxigoConfig(
             base_url=IxigoConfig.base_url,
             rate_limit_per_sec=rate_limit_per_sec,
         )
-        self.ixigo_interceptor = IxigoInterceptor(ixigo_config)
+        if flaresolverr_url:
+            ixigo_config.flaresolverr_url = flaresolverr_url
+        ixigo_config.flaresolverr_timeout = flaresolverr_timeout
+        self.ixigo_interceptor = IxigoInterceptor(
+            ixigo_config, session_store=self.session_store
+        )
 
         gf_config = GoogleFlightsConfig(
             rate_limit_per_sec=rate_limit_per_sec,
@@ -206,13 +220,16 @@ class AsyncFetcher:
                 "count": 0,
             }
 
-    async def _fetch_ixigo_playwright(
+    async def _fetch_ixigo_flaresolverr(
         self,
         query: dict[str, Any],
     ) -> dict[str, Any]:
-        """Fetch a single search query from Ixigo via Playwright.
+        """Fetch a single search query from Ixigo via FlareSolverr.
 
-        Uses browser context to bypass Cloudflare protection.
+        Solves the Cloudflare challenge once (cached for the run) and
+        replays the clearance cookies against the SSE endpoint via
+        aiohttp. Falls back to the Playwright browser context if
+        FlareSolverr is unavailable or returns no results.
 
         Args:
             query: Query dict from QueryBuilder.
@@ -229,9 +246,16 @@ class AsyncFetcher:
         await self._rate_limit_wait()
 
         try:
-            flights = await self.ixigo_interceptor.search_flights_playwright(
+            flights = await self.ixigo_interceptor.search_flights_flaresolverr(
                 origin, destination, departure_date, advance_window
             )
+
+            # If FlareSolverr returned nothing (e.g. stale cookies or
+            # unreachable service), fall back to the Playwright browser.
+            if not flights:
+                flights = await self.ixigo_interceptor.search_flights_playwright(
+                    origin, destination, departure_date, advance_window
+                )
 
             # Save extracted data
             self.raw_sink.save(
@@ -240,7 +264,7 @@ class AsyncFetcher:
                 advance_window=advance_window,
                 data={
                     "flight_count": len(flights),
-                    "extraction_method": "playwright_sse",
+                    "extraction_method": "flaresolverr_sse",
                 },
             )
 
@@ -379,13 +403,20 @@ class AsyncFetcher:
         results: list[dict[str, Any]] = []
         quote_batch: list[dict[str, Any]] = []
 
-        # Run Ixigo queries (Playwright-based — Cloudflare blocks aiohttp)
+        # Run Ixigo queries (FlareSolverr+Playwright hybrid)
         if "Ixigo" in self.sources:
-            logger.info("Starting Ixigo ingestion (Playwright)...")
+            logger.info("Starting Ixigo ingestion (FlareSolverr+Playwright)...")
+            if self.flaresolverr_required and not (
+                await self.ixigo_interceptor.is_flaresolverr_available()
+            ):
+                raise RuntimeError(
+                    "FlareSolverr is required for Ixigo but unreachable at "
+                    f"{self.ixigo_interceptor.ixigo_config.flaresolverr_url}"
+                )
             try:
                 await self.ixigo_interceptor.start_browser()
                 for i, query in enumerate(matrix):
-                    result = await self._fetch_ixigo_playwright(query)
+                    result = await self._fetch_ixigo_flaresolverr(query)
                     results.append(result)
                     quote_batch.extend(
                         f.to_quote_dict() for f in result["flights"]
@@ -479,6 +510,9 @@ async def run_fetch(
     rate_limit: float = 1.0,
     base_date: Optional[datetime] = None,
     sources: Optional[list[str]] = None,
+    flaresolverr_url: Optional[str] = None,
+    flaresolverr_timeout: int = 60,
+    flaresolverr_required: bool = False,
 ) -> dict[str, Any]:
     """Convenience function to run a full fetch cycle.
 
@@ -486,11 +520,20 @@ async def run_fetch(
         rate_limit: Requests per second per source.
         base_date: Reference date for queries.
         sources: List of sources to use (default: ["Ixigo", "Google Flights"]).
+        flaresolverr_url: Override FlareSolverr service URL.
+        flaresolverr_timeout: FlareSolverr challenge-solve timeout (sec).
+        flaresolverr_required: Abort if FlareSolverr unavailable (Ixigo).
 
     Returns:
         Fetch summary with flight data.
     """
-    fetcher = AsyncFetcher(rate_limit_per_sec=rate_limit, sources=sources)
+    fetcher = AsyncFetcher(
+        rate_limit_per_sec=rate_limit,
+        sources=sources,
+        flaresolverr_url=flaresolverr_url,
+        flaresolverr_timeout=flaresolverr_timeout,
+        flaresolverr_required=flaresolverr_required,
+    )
     try:
         return await fetcher.run(base_date)
     finally:
