@@ -2,7 +2,7 @@ services:
   - type: web
     name: apix-api
     runtime: docker
-    repo: # your GitHub repo URL, e.g. https://github.com/you/Airfare-Price-Fetcher
+    repo: https://github.com/lyc0riz/Smart-Airfare-Price-Index
     plan: free
     dockerfilePath: ./api.Dockerfile
     envVars:
