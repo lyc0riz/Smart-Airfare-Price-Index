@@ -3,13 +3,16 @@
 from typing import AsyncIterator
 
 import httpx
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, HTTPException, status
+from fastapi.security import APIKeyHeader
 
 from src.api.config import ApiSettings, get_api_settings
 
 settings: ApiSettings = get_api_settings()
 
-API_KEY_HEADER = "X-API-Key"
+API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+_X_API_KEY = Depends(API_KEY_HEADER)
 
 
 def get_httpx_client() -> AsyncIterator[httpx.AsyncClient]:
@@ -29,7 +32,7 @@ def get_httpx_client() -> AsyncIterator[httpx.AsyncClient]:
 
 
 def verify_api_key(
-    x_api_key: str = Header(default=""),
+    x_api_key: str = _X_API_KEY,
 ) -> str:
     """Validate the API key in the X-API-Key header.
 
