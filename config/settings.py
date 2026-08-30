@@ -13,6 +13,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # Paths
@@ -54,9 +55,7 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
     SUPABASE_SERVICE_KEY: str = ""
-
-    # DuckDB (legacy — kept for local dev/testing)
-    DB_PATH: Optional[str] = None
+    SUPABASE_ACCESS_TOKEN: Optional[str] = None
 
     # Proxy configuration (for production)
     PROXY_URL: Optional[str] = None

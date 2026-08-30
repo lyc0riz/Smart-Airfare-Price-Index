@@ -1,6 +1,6 @@
 # Data Schema & Extraction Specification
 
-Canonical reference for the APIx data pipeline. Defines the single source of truth for field names, types, extraction mappings, normalization rules, and DDL for all three medallion layers (Bronze → Silver → Gold).
+Canonical reference for the APIx data pipeline. Defines the single source of truth for field names, types, extraction mappings, normalization rules, and the production Supabase (PostgreSQL) DDL.
 
 ---
 
@@ -154,141 +154,44 @@ r'From (\d+) Indian rupees round trip total\. (.+?) flight with (.+?)\.
 | **N1** | All fares stored as `DECIMAL(10,2)` in INR. No rounding during storage. |
 | **N2** | Flight numbers normalized to `XX-NNNN` format (e.g., `AI2977` → `AI-2977`). |
 | **N3** | Times stored as local time (no timezone conversion). |
-| **N4** | `seat_remaining = 0` from Ixigo treated as `NULL` (undisclosed, not sold out). |
-| **N5** | `base_fare = total_fare` and `tax_total = 0` when source lacks tax breakdown. |
-| **N6** | `tax_breakdown_available` flag explicitly set to `FALSE` for Ixigo and Google Flights. |
+| **N4** | `seat_remaining` is not stored; Ixigo `seatRemaining == 0` maps to `is_sold_out = TRUE`. |
+| **N5** | `base_fare = total_fare` and `taxes = 0` when source lacks tax breakdown. `core_fare` (generated) is therefore 0 until decomposition is available. |
+| **N6** | Tax decomposition columns (`tax_udf`, `tax_asf`, `tax_gst`, `fees`) default to `0.00`. |
 | **N7** | Google Flights `round trip total` fares are treated as one-way for index purposes (search URL specifies one-way). |
-| **N8** | Missing optional fields (`duration_minutes`, `seat_remaining`, `carrier_code`, `flight_number`) stored as `NULL`. |
-| **N9** | `data_hash` = SHA-256(f"{route}:{carrier_code}:{flight_number}:{flight_date}:{total_fare}:{source}"). |
+| **N8** | Missing optional fields (`duration_min`, `carrier_code`) stored as `NULL`. Google Flights gets a synthetic flight number (see N10). |
+| **N9** | `data_hash` = SHA-256 of `{journey_date}:{origin}:{destination}:{carrier_code}:{flight_number}:{journey_class}:{total_fare}:{source_portal}`. |
+| **N10** | Google Flights synthetic flight number: `GF-{carrier_code|NA}-{HH:MM dep}-{HH:MM arr}` (e.g., `GF-6E-08:30-10:45`). The DOM does not expose real flight numbers; the synthetic ID disambiguates quotes and prevents unique-constraint collisions on identical fares. |
 
 ---
 
-## 4. Medallion DDL (DuckDB)
+## 4. Legacy DuckDB DDL (Removed)
 
-### 4.1 Bronze Layer (Raw Extracts)
-
-```sql
-CREATE TABLE IF NOT EXISTS bronze_flight_raw (
-    record_id           UUID PRIMARY KEY,
-    capture_timestamp   TIMESTAMP NOT NULL,
-    source              VARCHAR NOT NULL,          -- 'Ixigo', 'Google Flights'
-    source_session_id   VARCHAR,
-    route               VARCHAR NOT NULL,          -- 'DEL-BOM'
-    origin              VARCHAR(3) NOT NULL,
-    destination         VARCHAR(3) NOT NULL,
-    flight_date         DATE NOT NULL,
-    advance_window      INTEGER NOT NULL,
-    carrier_code        VARCHAR(2),                -- NULL for Google Flights
-    carrier_name        VARCHAR(100) NOT NULL,
-    flight_number       VARCHAR(20),               -- NULL for Google Flights
-    fare_class          VARCHAR(30) NOT NULL DEFAULT 'ECONOMY',
-    base_fare           DECIMAL(10,2) NOT NULL,
-    tax_total           DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-    tax_breakdown_available BOOLEAN NOT NULL DEFAULT FALSE,
-    total_fare          DECIMAL(10,2) NOT NULL,
-    currency            VARCHAR(3) NOT NULL DEFAULT 'INR',
-    departure_time      TIME NOT NULL,
-    arrival_time        TIME NOT NULL,
-    stops               INTEGER NOT NULL DEFAULT 0,
-    duration_minutes    INTEGER,
-    seat_remaining      INTEGER,
-    is_refundable       BOOLEAN NOT NULL DEFAULT FALSE,
-    is_imputed          BOOLEAN NOT NULL DEFAULT FALSE,
-    data_hash           VARCHAR(64) NOT NULL,
-    raw_payload         JSON                       -- Full source response for audit
-);
-
--- Partition index for efficient date-range queries
-CREATE INDEX idx_bronze_flight_date ON bronze_flight_raw(flight_date);
-CREATE INDEX idx_bronze_route ON bronze_flight_raw(route);
-CREATE INDEX idx_bronze_source ON bronze_flight_raw(source);
-```
-
-### 4.2 Silver Layer (Cleaned & Deduplicated)
-
-```sql
-CREATE TABLE IF NOT EXISTS silver_flight_clean (
-    record_id           UUID PRIMARY KEY,
-    capture_timestamp   TIMESTAMP NOT NULL,
-    source              VARCHAR NOT NULL,
-    route               VARCHAR NOT NULL,
-    origin              VARCHAR(3) NOT NULL,
-    destination         VARCHAR(3) NOT NULL,
-    flight_date         DATE NOT NULL,
-    advance_window      INTEGER NOT NULL,
-    carrier_code        VARCHAR(2),
-    carrier_name        VARCHAR(100) NOT NULL,
-    flight_number       VARCHAR(20),
-    fare_class          VARCHAR(30) NOT NULL,
-    base_fare           DECIMAL(10,2) NOT NULL,
-    tax_total           DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-    tax_breakdown_available BOOLEAN NOT NULL DEFAULT FALSE,
-    total_fare          DECIMAL(10,2) NOT NULL,
-    currency            VARCHAR(3) NOT NULL DEFAULT 'INR',
-    departure_time      TIME NOT NULL,
-    arrival_time        TIME NOT NULL,
-    stops               INTEGER NOT NULL DEFAULT 0,
-    duration_minutes    INTEGER,
-    seat_remaining      INTEGER,
-    is_refundable       BOOLEAN NOT NULL DEFAULT FALSE,
-    is_imputed          BOOLEAN NOT NULL DEFAULT FALSE,
-    data_hash           VARCHAR(64) NOT NULL,
-    core_fare           DECIMAL(10,2) GENERATED ALWAYS AS (base_fare + tax_total) STORED
-);
-
-CREATE INDEX idx_silver_flight_date ON silver_flight_clean(flight_date);
-CREATE INDEX idx_silver_route ON silver_flight_clean(route);
-CREATE INDEX idx_silver_source ON silver_flight_clean(source);
-CREATE INDEX idx_silver_hash ON silver_flight_clean(data_hash);
-```
-
-### 4.3 Gold Layer (Index-Ready Aggregates)
-
-```sql
-CREATE TABLE IF NOT EXISTS gold_flight_index_ready (
-    id                  UUID PRIMARY KEY,
-    observation_date    DATE NOT NULL,             -- Date of capture
-    flight_date         DATE NOT NULL,             -- Date of travel
-    route               VARCHAR NOT NULL,
-    origin              VARCHAR(3) NOT NULL,
-    destination         VARCHAR(3) NOT NULL,
-    advance_window      INTEGER NOT NULL,
-    carrier_code        VARCHAR(2),
-    carrier_name        VARCHAR(100) NOT NULL,
-    flight_number       VARCHAR(20),
-    total_fare          DECIMAL(10,2) NOT NULL,
-    base_fare           DECIMAL(10,2) NOT NULL,
-    tax_total           DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-    tax_breakdown_available BOOLEAN NOT NULL DEFAULT FALSE,
-    fare_class          VARCHAR(30) NOT NULL,
-    route_weight        DECIMAL(5,4),              -- From routes_weights.json
-    is_imputed          BOOLEAN NOT NULL DEFAULT FALSE,
-    data_hash           VARCHAR(64) NOT NULL,
-    UNIQUE(route, flight_date, carrier_code, flight_number, observation_date, source)
-);
-
-CREATE INDEX idx_gold_obs_date ON gold_flight_index_ready(observation_date);
-CREATE INDEX idx_gold_flight_date ON gold_flight_index_ready(flight_date);
-CREATE INDEX idx_gold_route ON gold_flight_index_ready(route);
-CREATE INDEX idx_gold_advance ON gold_flight_index_ready(advance_window);
-```
+The medallion (Bronze/Silver/Gold) DuckDB schema was removed in Phase 4S.
+PostgreSQL on Supabase is the sole production storage layer — see
+**Section 8** for the canonical DDL. Raw response JSON remains on local
+disk under `data/raw/YYYY-MM-DD/` for auditable lineage.
 
 ---
 
-## 5. Truth Triangle (Future Multi-Source Validation)
+## 5. Truth Triangle (Cross-Source Parity Validation)
 
-When a second source is added, group observations by composite key:
-`[flight_date, route, flight_number]`
+Implemented in `src/validation/truth_triangle.py`. Cross-source matching
+groups observations on the composite key:
 
-```
-Core Fare = base_fare + tax_total
-```
+`[journey_date, origin, destination, carrier_code, departure_time, arrival_time]`
 
-- If sources agree within 1%: accept both records
-- If sources disagree > 1%: flag in audit log, prefer primary source
-- Tie-breaker: If available, cross-reference against airline direct API
+> Note: `flight_number` is NOT part of the match key — Google Flights uses
+> synthetic flight numbers (rule N10) that cannot be matched against Ixigo.
 
-**Current status:** Single source (Ixigo primary, Google Flights secondary). Truth Triangle deferred until cross-source matching is implemented.
+Parity metric compares `total_fare` between the primary source (Ixigo)
+and secondary source (Google Flights):
+
+- Sources agree within 1%: accept both records
+- Disparity > 1%: flag in audit log, prefer primary source value
+- Unknown-carrier Google Flights rows (`carrier_code IS NULL`) cannot be
+  matched and are reported as unmatched
+
+**Current status:** Implemented; parity runs post-ingestion each cycle.
 
 ---
 
@@ -297,19 +200,17 @@ Core Fare = base_fare + tax_total
 | Field | Ixigo | Google Flights |
 |-------|-------|----------------|
 | `carrier_code` | `flightDetails[0].airlineCode` | `NULL` |
-| `carrier_name` | `flightDetails[0].headerTextWeb` | `aria-label` regex |
-| `flight_number` | `flightDetails[0].subHeaderTextWeb` | `NULL` |
-| `fare_class` | `fares[0].fareMetadata[0].cabinClass` | `"ECONOMY"` (default) |
+| `carrier_name` → `carrier` | `flightDetails[0].headerTextWeb` | `aria-label` regex |
+| `flight_number` | `flightDetails[0].subHeaderTextWeb` (normalized) | Synthetic `GF-{code}-{dep}-{arr}` (rule N10) |
+| `journey_class` | `fares[0].fareMetadata[0].cabinClass` | `"ECONOMY"` (default) |
 | `base_fare` | `= total_fare` (no breakdown) | `= total_fare` (no breakdown) |
-| `tax_total` | `0.00` | `0.00` |
-| `tax_breakdown_available` | `FALSE` | `FALSE` |
+| `taxes` | `0.00` | `0.00` |
 | `total_fare` | `fares[0].fareDetails.displayFare` | `aria-label` regex |
 | `departure_time` | `flightDetails[0].departureTime` | `aria-label` regex |
 | `arrival_time` | `flightDetails[0].arrivalTime` | `aria-label` regex |
 | `stops` | `flightDetails[0].stop` | `aria-label` regex |
-| `duration_minutes` | `flightDetails[0].duration.time` | `NULL` |
-| `seat_remaining` | `fares[0].fareMetadata[0].seatRemaining` | `NULL` |
-| `is_refundable` | `refundableType` field | `NULL` |
+| `duration_min` | `flightDetails[0].duration.time` | `NULL` |
+| `is_sold_out` | `seatRemaining == 0` | `FALSE` (sold-out flights not rendered) |
 
 ---
 
@@ -332,7 +233,7 @@ Core Fare = base_fare + tax_total
 
 ## 8. Supabase DDL (PostgreSQL)
 
-> **Note:** Section 4 contains legacy DuckDB DDL. The Supabase schema below is the production storage layer. Run this DDL in Supabase SQL Editor.
+> **Note:** The legacy DuckDB DDL (former Section 4) has been removed. The Supabase schema below is the production storage layer. It is already deployed; migrations live in the Supabase migration history.
 
 ### 8.1 Flight Quotes (main data table)
 

@@ -22,6 +22,7 @@ from src.ingestion.interceptors.google_flights import (
 from src.ingestion.query_builder import QueryBuilder
 from src.ingestion.raw_sink import RawSink
 from src.ingestion.session_store import SessionStore
+from src.storage.supabase_sink import SupabaseSink
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ class AsyncFetcher:
     - Ixigo: aiohttp API calls to SSE endpoint
     - Google Flights: Playwright DOM extraction
 
-    Orchestrates: QueryBuilder → Interceptors → RawSink
+    Orchestrates: QueryBuilder → Interceptors → RawSink + SupabaseSink
     """
 
     def __init__(
@@ -41,8 +42,10 @@ class AsyncFetcher:
         session_store: Optional[SessionStore] = None,
         raw_sink: Optional[RawSink] = None,
         query_builder: Optional[QueryBuilder] = None,
+        supabase_sink: Optional[SupabaseSink] = None,
         rate_limit_per_sec: float = 1.0,
         sources: Optional[list[str]] = None,
+        persist_to_supabase: bool = True,
     ) -> None:
         """Initialize async fetcher.
 
@@ -50,12 +53,16 @@ class AsyncFetcher:
             session_store: Token/session cache.
             raw_sink: Raw response storage.
             query_builder: Query matrix generator.
+            supabase_sink: PostgreSQL sink for flight quotes.
             rate_limit_per_sec: Max requests per second per source.
             sources: List of source names to use. Default: ["Ixigo", "Google Flights"].
+            persist_to_supabase: Whether to upsert flight quotes to Supabase.
         """
         self.session_store = session_store or SessionStore()
         self.raw_sink = raw_sink or RawSink()
         self.query_builder = query_builder or QueryBuilder()
+        self.supabase_sink = supabase_sink or SupabaseSink()
+        self.persist_to_supabase = persist_to_supabase
         self.rate_limit_per_sec = rate_limit_per_sec
         self.sources = sources or ["Ixigo", "Google Flights"]
 
@@ -323,6 +330,31 @@ class AsyncFetcher:
                 "count": 0,
             }
 
+    async def _flush_quotes(self, quote_batch: list[dict[str, Any]]) -> int:
+        """Batch-upsert accumulated quote dicts to Supabase.
+
+        Args:
+            quote_batch: Quote dicts from FlightData.to_quote_dict().
+
+        Returns:
+            Number of records upserted (0 if persistence disabled/failed).
+        """
+        if not self.persist_to_supabase or not quote_batch:
+            return 0
+
+        chunk_size = 500
+        upserted = 0
+        try:
+            for start in range(0, len(quote_batch), chunk_size):
+                chunk = quote_batch[start:start + chunk_size]
+                upserted += await self.supabase_sink.upsert_flight_quotes(
+                    chunk
+                )
+            logger.info(f"Batch upserted {upserted} flight quotes")
+        except Exception as e:
+            logger.error(f"Supabase batch upsert failed: {e}")
+        return upserted
+
     async def run(
         self,
         base_date: Optional[datetime] = None,
@@ -340,8 +372,12 @@ class AsyncFetcher:
             f"Running {len(matrix)} queries × {len(self.sources)} sources"
         )
 
+        if self.persist_to_supabase:
+            await self.supabase_sink.connect()
+
         start_time = time.time()
         results: list[dict[str, Any]] = []
+        quote_batch: list[dict[str, Any]] = []
 
         # Run Ixigo queries (Playwright-based — Cloudflare blocks aiohttp)
         if "Ixigo" in self.sources:
@@ -351,6 +387,9 @@ class AsyncFetcher:
                 for i, query in enumerate(matrix):
                     result = await self._fetch_ixigo_playwright(query)
                     results.append(result)
+                    quote_batch.extend(
+                        f.to_quote_dict() for f in result["flights"]
+                    )
 
                     if (i + 1) % 10 == 0:
                         logger.info(
@@ -367,6 +406,9 @@ class AsyncFetcher:
                 for i, query in enumerate(matrix):
                     result = await self._fetch_google_flights_one(query)
                     results.append(result)
+                    quote_batch.extend(
+                        f.to_quote_dict() for f in result["flights"]
+                    )
 
                     if (i + 1) % 10 == 0:
                         logger.info(
@@ -374,6 +416,11 @@ class AsyncFetcher:
                         )
             finally:
                 await self.gf_interceptor.stop_browser()
+
+        quotes_upserted = await self._flush_quotes(quote_batch)
+
+        if self.persist_to_supabase:
+            await self.supabase_sink.close()
 
         elapsed = time.time() - start_time
 
@@ -401,6 +448,7 @@ class AsyncFetcher:
             "successes": len(successes),
             "errors": len(errors),
             "total_flights": total_flights,
+            "quotes_upserted": quotes_upserted,
             "elapsed_seconds": round(elapsed, 2),
             "queries_per_second": round(
                 (len(matrix) * len(self.sources)) / elapsed, 2
@@ -423,6 +471,8 @@ class AsyncFetcher:
         """Clean up resources."""
         await self.ixigo_interceptor.close()
         await self.gf_interceptor.stop_browser()
+        if self.supabase_sink.pool:
+            await self.supabase_sink.close()
 
 
 async def run_fetch(

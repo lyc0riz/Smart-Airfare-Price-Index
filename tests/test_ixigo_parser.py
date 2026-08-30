@@ -89,11 +89,11 @@ class TestIxigoInterceptor:
         f = flights[0]
         assert f.carrier_code == "6E"
         assert f.total_fare == 5750.0
-        assert f.seat_remaining == 12
-        assert f.duration_minutes == 135
+        assert f.is_sold_out is False
+        assert f.duration_min == 135
 
     def test_parse_sse_text_2stop_flights(self, ixigo):
-        """2-stop flight with seat_remaining=0 (should become None)."""
+        """2-stop flight with seatRemaining=0 (should map to is_sold_out=True)."""
         payload = _make_sse_payload([{
             "flightDetails": [{
                 "airlineCode": "AI",
@@ -120,7 +120,7 @@ class TestIxigoInterceptor:
         flights = ixigo._parse_sse_text(f"data: {payload}", "DEL-BOM", "DEL", "BOM", 7)
         assert len(flights) == 1
         assert flights[0].stops == 2
-        assert flights[0].seat_remaining is None  # 0 → None
+        assert flights[0].is_sold_out is True  # seatRemaining=0 → sold out
 
     def test_parse_sse_text_multi_leg_concatenated(self, ixigo):
         """Multi-leg flight: real data has comma-separated flight numbers in subHeaderTextWeb."""
@@ -154,4 +154,4 @@ class TestIxigoInterceptor:
         f = flights[0]
         assert f.stops == 1
         assert f.total_fare == 13748.0
-        assert f.seat_remaining == 5
+        assert f.is_sold_out is False

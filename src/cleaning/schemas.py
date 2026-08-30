@@ -1,7 +1,10 @@
 """Pydantic V2 models for APIx flight data.
 
-Defines validated schemas for raw (Bronze), cleaned (Silver), and
-index-ready (Gold) flight data layers.
+Defines the validated flight quote schema matching the Supabase
+`flight_quotes` table (docs/DATA_SCHEMA_AND_EXTRACTION_SPEC.md Section 8).
+
+Generated columns (`route`, `core_fare`, `booking_date`) are computed by
+PostgreSQL and are NOT part of this model.
 """
 
 import hashlib
@@ -9,8 +12,11 @@ import uuid
 from datetime import date, datetime, time
 from enum import Enum
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, field_validator
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 class SourceEnum(str, Enum):
@@ -30,63 +36,72 @@ class FareClassEnum(str, Enum):
 
 
 def compute_data_hash(
-    route: str,
+    journey_date: date,
+    origin: str,
+    destination: str,
     carrier_code: Optional[str],
     flight_number: Optional[str],
-    flight_date: date,
+    journey_class: str,
     total_fare: float,
-    source: str,
+    source_portal: str,
 ) -> str:
-    """Compute SHA-256 hash of composite key fields."""
-    raw = f"{route}:{carrier_code or ''}:{flight_number or ''}:{flight_date}:{total_fare}:{source}"
+    """Compute SHA-256 hash of the flight quote composite key."""
+    raw = (
+        f"{journey_date}:{origin}:{destination}:{carrier_code or ''}:"
+        f"{flight_number or ''}:{journey_class}:{total_fare}:{source_portal}"
+    )
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-class FlightRecord(BaseModel):
-    """Validated flight data record.
+def combine_journey_datetime(journey_date: date, hhmm: str) -> datetime:
+    """Combine a journey date with an HH:MM local time into IST-aware datetime.
 
-    Used across all three medallion layers. The Bronze layer populates
-    `raw_payload`; Silver strips it; Gold adds `route_weight`.
+    Args:
+        journey_date: Scheduled departure date.
+        hhmm: Local time in HH:MM (24-hour) format.
+
+    Returns:
+        Timezone-aware datetime in Asia/Kolkata.
+    """
+    t = time.fromisoformat(hhmm)
+    return datetime.combine(journey_date, t, tzinfo=IST)
+
+
+class FlightRecord(BaseModel):
+    """Validated flight quote record.
+
+    Mirrors the `flight_quotes` table columns. Use `to_quote_dict()` to
+    produce a dict compatible with `SupabaseSink.upsert_flight_quotes()`.
     """
 
     model_config = {"populate_by_name": True}
 
-    record_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    capture_timestamp: datetime = Field(default_factory=lambda: datetime.utcnow())
-    source: SourceEnum
-    source_session_id: Optional[str] = None
-    route: str
+    quote_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    source_portal: SourceEnum
+    scraping_date_time: datetime = Field(default_factory=lambda: datetime.now(tz=IST))
+    journey_date: date
     origin: str = Field(min_length=3, max_length=3)
     destination: str = Field(min_length=3, max_length=3)
-    flight_date: date
-    advance_window: int = Field(ge=0, le=365)
-    carrier_code: Optional[str] = Field(default=None, min_length=2, max_length=2)
-    carrier_name: str
-    flight_number: Optional[str] = None
-    fare_class: FareClassEnum = FareClassEnum.ECONOMY
+    advance_windows: int = Field(ge=0, le=365)
+    carrier_code: Optional[str] = Field(default=None, max_length=10)
+    carrier: str = Field(max_length=50)
+    flight_number: Optional[str] = Field(default=None, max_length=50)
+    journey_class: FareClassEnum = FareClassEnum.ECONOMY
+    fare: float = Field(gt=0)
     base_fare: float = Field(gt=0)
-    tax_total: float = Field(ge=0, default=0.0)
-    tax_breakdown_available: bool = False
+    fees: float = Field(default=0.0, ge=0)
+    tax_udf: float = Field(default=0.0, ge=0)
+    tax_asf: float = Field(default=0.0, ge=0)
+    tax_gst: float = Field(default=0.0, ge=0)
+    taxes: float = Field(default=0.0, ge=0)
     total_fare: float = Field(gt=0)
-    currency: str = Field(default="INR", min_length=3, max_length=3)
-    departure_time: time
-    arrival_time: time
+    departure: datetime
+    arrival: datetime
+    duration_min: Optional[int] = Field(default=None, ge=0)
     stops: int = Field(ge=0, default=0)
-    duration_minutes: Optional[int] = Field(default=None, ge=0)
-    seat_remaining: Optional[int] = Field(default=None, ge=0)
-    is_refundable: bool = False
+    is_sold_out: bool = False
     is_imputed: bool = False
     data_hash: str = ""
-    raw_payload: Optional[dict] = None
-
-    @field_validator("route")
-    @classmethod
-    def validate_route(cls, v: str) -> str:
-        """Ensure route follows ORIGIN-DEST pattern."""
-        parts = v.split("-")
-        if len(parts) != 2 or len(parts[0]) != 3 or len(parts[1]) != 3:
-            raise ValueError(f"Route must be ORIGIN-DEST (3-letter codes): {v}")
-        return v.upper()
 
     @field_validator("origin", "destination")
     @classmethod
@@ -100,29 +115,25 @@ class FlightRecord(BaseModel):
         """Ensure carrier code is uppercase if provided."""
         return v.upper() if v else v
 
-    @field_validator("seat_remaining")
+    @field_validator("total_fare", "fare", "base_fare")
     @classmethod
-    def validate_seat_remaining(cls, v: Optional[int]) -> Optional[int]:
-        """Treat 0 as NULL (undisclosed, not sold out)."""
-        return None if v == 0 else v
-
-    @field_validator("total_fare")
-    @classmethod
-    def validate_total_fare_positive(cls, v: float) -> float:
-        """Total fare must be positive."""
+    def validate_positive_money(cls, v: float) -> float:
+        """Monetary amounts must be positive."""
         if v <= 0:
-            raise ValueError(f"total_fare must be positive: {v}")
+            raise ValueError(f"monetary amount must be positive: {v}")
         return round(v, 2)
 
     def compute_hash(self) -> str:
         """Compute and set the data hash."""
         self.data_hash = compute_data_hash(
-            self.route,
+            self.journey_date,
+            self.origin,
+            self.destination,
             self.carrier_code,
             self.flight_number,
-            self.flight_date,
+            self.journey_class.value,
             self.total_fare,
-            self.source.value,
+            self.source_portal.value,
         )
         return self.data_hash
 
@@ -131,9 +142,39 @@ class FlightRecord(BaseModel):
         if not self.data_hash:
             self.compute_hash()
 
-    def to_core_fare(self) -> float:
-        """Compute core fare = base_fare + tax_total."""
-        return round(self.base_fare + self.tax_total, 2)
+    def to_quote_dict(self) -> dict:
+        """Produce a dict for SupabaseSink.upsert_flight_quotes().
+
+        Excludes generated columns (route, core_fare, booking_date).
+        """
+        return {
+            "quote_id": uuid.UUID(self.quote_id),
+            "source_portal": self.source_portal.value,
+            "scraping_date_time": self.scraping_date_time,
+            "journey_date": self.journey_date,
+            "origin": self.origin,
+            "destination": self.destination,
+            "advance_windows": self.advance_windows,
+            "carrier_code": self.carrier_code,
+            "carrier": self.carrier,
+            "flight_number": self.flight_number,
+            "journey_class": self.journey_class.value,
+            "fare": self.fare,
+            "base_fare": self.base_fare,
+            "fees": self.fees,
+            "tax_udf": self.tax_udf,
+            "tax_asf": self.tax_asf,
+            "tax_gst": self.tax_gst,
+            "taxes": self.taxes,
+            "total_fare": self.total_fare,
+            "departure": self.departure,
+            "arrival": self.arrival,
+            "duration_min": self.duration_min,
+            "stops": self.stops,
+            "is_sold_out": self.is_sold_out,
+            "is_imputed": self.is_imputed,
+            "data_hash": self.data_hash,
+        }
 
 
 class IxigoRawPayload(BaseModel):

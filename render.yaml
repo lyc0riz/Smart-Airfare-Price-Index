@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: apix-api
+    runtime: docker
+    repo: # your GitHub repo URL, e.g. https://github.com/you/Airfare-Price-Fetcher
+    plan: free
+    dockerfilePath: ./api.Dockerfile
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: API_KEYS
+        sync: false
+    healthCheckPath: /api/v1/health
+    autoDeploy: true

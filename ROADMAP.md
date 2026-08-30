@@ -127,22 +127,22 @@ An automated, scalable, and ethically compliant data pipeline and index construc
   - Write to `silver_flight_clean` table.
   - **Note:** DuckDB `db.py` is legacy. New writes go to `supabase_sink.py`.
 
-- [ ] **4.3 "Truth Triangle" Parity Validation Engine**
+- [x] **4.3 "Truth Triangle" Parity Validation Engine**
   - Create `src/validation/truth_triangle.py`.
-  - Group observations by composite key: `[flight_date, route, flight_number]`.
-  - Compute `Core Fare = base_fare + tax_total`.
-  - Evaluate parity: Compare `Core Fare` between Ixigo and Google Flights.
+  - Group observations by composite key: `[journey_date, origin, destination, carrier_code, departure_time, arrival_time]` (flight_number excluded — Google Flights uses synthetic IDs).
+  - Evaluate parity: Compare `total_fare` between Ixigo and Google Flights.
   - Tie-breaker logic: If a disparity is detected (> 1% delta), prefer primary source (Ixigo) and flag in audit log.
 
-- [ ] **4.4 Sold-Out Flights & Missing Value Imputation (Jevons Cell-Relative Method)**
+- [x] **4.4 Sold-Out Flights & Missing Value Imputation (Jevons Cell-Relative Method)**
   - Create `src/cleaning/imputer.py`.
   - Identify missing or sold-out flight slots in the current day's matrix against the historical flight catalog.
   - Implement **Cell-Relative Imputation**:
     1. Define cell: `[route, advance_window]`.
     2. Compute cell price growth factor $R_{c, t} = \left(\prod_{i=1}^{n} \frac{p_{i, t}}{p_{i, t-1}}\right)^{1/n}$ using `scipy.stats.gmean` on matched available flights between yesterday ($t-1$) and today ($t$).
     3. Impute missing price: $p_{missing, t} = p_{missing, t-1} \times R_{c, t}$.
-  - Implement hierarchical fallback: If entire cell is sold out, fall back to Route-level average growth $\rightarrow$ National average growth $\rightarrow$ Last known price.
-  - Add boolean flag `is_imputed = True` to imputed rows.
+  - Implement hierarchical fallback: Cell-level growth $\rightarrow$ Route-level growth $\rightarrow$ National growth $\rightarrow$ Last known price (growth=1.0).
+  - Add boolean flag `is_imputed = TRUE` to imputed rows.
+  - Integration in `main.py`: runs after ingestion, before Truth Triangle + Index.
 
 - [ ] **4.5 Partitioned CSV Writer**
   - Create `src/cleaning/storage_writer.py` to append cleaned, validated records into daily CSV files: `data/processed/apix_clean_YYYY-MM-DD.csv`.
@@ -173,40 +173,76 @@ Migrate from DuckDB local database to PostgreSQL on Supabase for production stor
   - Creates: `flight_quotes`, `route_weights`, `advance_window_weights`, `base_period_prices`, `airfare_price_index` + 3 views.
   - DDL documented in `docs/DATA_SCHEMA_AND_EXTRACTION_SPEC.md` Section 8.
 
-- [ ] **4S.5 Schema Rewrite**
+- [x] **4S.5 Schema Rewrite**
   - Rewrite `src/cleaning/schemas.py` `FlightRecord` to match `flight_quotes` columns.
   - Rename fields: `record_id`→`quote_id`, `source`→`source_portal`, `tax_total`→`taxes`, etc.
   - Add new fields: `tax_udf`, `tax_asf`, `tax_gst`, `fees`, `is_sold_out`, `booking_date`.
   - Change `departure_time`/`arrival_time` to `TIMESTAMPTZ` (`departure`/`arrival`).
   - Generated columns (`route`, `core_fare`, `booking_date`) computed by PostgreSQL, not Python.
 
-- [ ] **4S.6 Interceptor Updates**
+- [x] **4S.6 Interceptor Updates**
   - Update `src/ingestion/interceptors/base.py` `FlightData` — add new fields, remove old ones, add `to_quote_dict()`.
   - Update `ixigo.py` — map `seatRemaining==0` → `is_sold_out=True`, parse timestamps.
   - Update `google_flights.py` — same mapping changes.
 
-- [ ] **4S.7 Pipeline Wiring**
+- [x] **4S.7 Pipeline Wiring**
   - Update `src/ingestion/async_fetcher.py` — replace DuckDB `insert_bronze()` with `SupabaseSink.upsert_flight_quotes()`.
   - Remove normalizer import — dedup now handled by `ON CONFLICT` in PostgreSQL.
   - Keep raw sink (`data/raw/`) for auditable lineage.
 
-- [ ] **4S.8 Index Construction**
+- [x] **4S.8 Index Construction**
   - Create `src/indexing/jevons.py` — daily geometric means per cell.
   - Create `src/indexing/base_period.py` — base period prices from first scrape date.
   - Create `src/indexing/laspeyres.py` — weighted index computation.
   - Create `src/indexing/pipeline.py` — orchestrator: jevons → base_period → laspeyres → upsert.
   - SQL: `EXP(AVG(LN(core_fare)))` for Jevons, `SUM(index × route_weight × window_weight)` for Laspeyres.
 
-- [ ] **4S.9 Test Rewrite**
+- [x] **4S.9 Test Rewrite**
   - Update `tests/test_schemas.py` — new field names, add new field tests.
   - Replace `tests/test_db.py` with `tests/test_supabase_sink.py` (mock asyncpg).
   - Remove `tests/test_normalizer.py` — dedup now in DB.
   - Update `tests/test_ixigo_parser.py` and `tests/test_google_flights.py` — new fields.
   - Add `tests/test_jevons.py`, `tests/test_laspeyres.py`, `tests/test_pipeline.py`.
 
-- [ ] **4S.10 Docs & Cleanup**
+- [x] **4S.10 Docs & Cleanup**
   - Remove `src/storage/db.py` (DuckDB manager).
   - Remove `data/apix.duckdb`.
   - Update `docs/DATA_SCHEMA_AND_EXTRACTION_SPEC.md` — replace medallion DDL with Supabase DDL.
   - Update `ROADMAP.md` — mark all 4S sub-phases.
   - Update `AGENTS.md` — new architecture.
+---
+
+## Phase 5: Pipeline Orchestration & Automation ✅ Completed
+
+- [x] **5.1 GitHub Actions Workflow**
+  - Create `.github/workflows/daily-pipeline.yml` — runs at `30 8,20 * * *` (2 AM / 2 PM IST).
+  - Supabase secrets injected via `${{ secrets.* }}`.
+  - Playwright chromium install, artifact upload, auto-issue on failure.
+  - Document secrets in `SECRETS.md`.
+
+- [x] **5.2 Pipeline Orchestration Modules**
+  - `src/indexing/jevons.py` — pure functions: `geometric_mean`, `aggregate_jevons`, `compute_cell_indices`, `compute_overall_apix`.
+  - `src/indexing/pipeline.py` — `IndexPipeline` orchestrator (calibrate → aggregate → index → upsert), `run_all_portals()`.
+  - Refactor `laspeyres_engine.py` to delegate to `jevons.py`.
+  - Tests: `test_jevons.py` (17), `test_pipeline.py` (7). Full suite: **122 passing**.
+
+---
+
+## Phase 6: Thin-Wrapper API ✅ Completed
+
+- [x] **6.1 FastAPI Thin Wrapper over Supabase PostgREST**
+  - `src/api/main.py` — app, CORS, slowapi rate limiting, lifespan-managed shared httpx client.
+  - `src/api/config.py` — `ApiSettings` (API keys, rate limit, CORS, Supabase creds).
+  - `src/api/dependencies.py` — PostgREST client + API key (`X-API-Key`) + admin scoping.
+  - `src/api/models.py` — `Meta`, `ApixResponse`, `ErrorResponse`, `HealthResponse`.
+  - `src/api/routes/apix.py` — `/apix/latest`, `/apix/weekly`, `/apix/monthly`, `/apix/by-route`, `/apix/heatmap`, `/apix/elasticity`, `/apix/airlines`.
+  - `src/api/routes/health.py` — `/health`, `/admin/coverage`.
+
+- [x] **6.2 Deployment**
+  - `api.Dockerfile` (binds `$PORT`) + `.dockerignore` + `render.yaml` (Render Blueprint, free plan).
+  - `.github/workflows/api-deploy.yml` — run API tests then trigger Render Deploy Hook on `src/api/**` change.
+  - `SECRETS.md` updated with `RENDER_DEPLOY_HOOK`.
+  - Render auto-deploy (`autoDeploy: true`) + manual Deploy Hook for CI control.
+
+- [x] **6.3 Tests**
+  - `test_api_models.py`, `test_api_auth.py`, `test_api_routes.py` (22 tests, mocked PostgREST).

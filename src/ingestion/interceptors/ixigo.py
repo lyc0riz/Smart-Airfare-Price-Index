@@ -241,13 +241,13 @@ class IxigoInterceptor(BaseInterceptor):
 
             flight_details = flight_details_list[0]
             airline_code = flight_details.get("airlineCode", "")
-            carrier_name = flight_details.get("headerTextWeb", "")
+            carrier = flight_details.get("headerTextWeb", "")
             raw_flight_number = flight_details.get("subHeaderTextWeb", "")
             departure_time = flight_details.get("departureTime", "")
             arrival_time = flight_details.get("arrivalTime", "")
             stops = flight_details.get("stop", 0)
             duration = flight_details.get("duration", {})
-            duration_minutes = duration.get("time") if duration else None
+            duration_min = duration.get("time") if duration else None
 
             # Normalize flight number: "AI2977" → "AI-2977"
             flight_number = self._normalize_flight_number(raw_flight_number)
@@ -266,45 +266,36 @@ class IxigoInterceptor(BaseInterceptor):
 
             # Extract metadata
             cabin_class = "ECONOMY"
-            seat_remaining = None
+            is_sold_out = False
             if fare_metadata_list:
                 meta = fare_metadata_list[0]
                 cabin_class = meta.get("cabinClass", "ECONOMY")
-                seat_raw = meta.get("seatRemaining", 0)
-                # 0 means undisclosed, treat as NULL
-                seat_remaining = seat_raw if seat_raw > 0 else None
+                is_sold_out = meta.get("seatRemaining", 0) == 0
 
-            # Extract flight date from flightKeys: "DEL-BOM-AI2977-01092026"
-            flight_date = self._parse_flight_date(
+            # Extract journey date from flightKeys: "DEL-BOM-AI2977-01092026"
+            journey_date = self._parse_flight_date(
                 fare_entry.get("flightKeys", ""), advance_window
             )
 
-            # Determine refundable status
-            refundable_type = fare_entry.get("refundableType", "")
-            is_refundable = refundable_type == "REFUNDABLE"
-
             return FlightData(
-                source="Ixigo",
-                route=route,
+                source_portal="Ixigo",
                 origin=origin,
                 destination=destination,
-                flight_date=flight_date,
+                journey_date=journey_date,
+                advance_windows=advance_window,
                 carrier_code=airline_code,
-                carrier_name=carrier_name,
+                carrier=carrier,
                 flight_number=flight_number,
-                fare_class=cabin_class,
+                journey_class=cabin_class,
+                fare=total_fare,
                 base_fare=total_fare,  # No tax breakdown available
-                tax_total=0.0,
-                tax_breakdown_available=False,
+                taxes=0.0,
                 total_fare=total_fare,
-                currency="INR",
                 departure_time=departure_time,
                 arrival_time=arrival_time,
                 stops=stops,
-                duration_minutes=duration_minutes,
-                seat_remaining=seat_remaining,
-                is_refundable=is_refundable,
-                advance_window=advance_window,
+                duration_min=duration_min,
+                is_sold_out=is_sold_out,
                 raw_data=fare_entry,
             )
 

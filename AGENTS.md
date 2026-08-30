@@ -64,20 +64,34 @@ Airfare Price Fetcher/
 │   │   ├── token_harvester.py # Playwright token harvester
 │   │   └── compliance.py      # robots.txt, User-Agent
 │   ├── cleaning/
-│   │   └── schemas.py         # Pydantic V2 models (FlightRecord, enums)
+│   │   ├── schemas.py         # Pydantic V2 models (FlightRecord, enums)
+│   │   └── imputer.py         # Jevons cell-relative imputation
 │   ├── storage/
-│   │   ├── db.py              # DuckDB (legacy — local dev/testing only)
 │   │   └── supabase_sink.py   # PostgreSQL async sink (primary storage)
 │   ├── validation/            # Truth triangle parity checks
-│   ├── indexing/              # PSD index construction
-│   ├── api/                   # FastAPI endpoints
-│   └── dashboard/             # Streamlit dashboard
+│   │   └── truth_triangle.py  # Cross-source fare parity engine
+│   ├── indexing/              # APIx index construction
+│   │   ├── base_calibrator.py # Jevons aggregates + base period
+│   │   ├── laspeyres_engine.py# Weighted Laspeyres index engine
+│   │   ├── jevons.py          # Pure Jevons + Laspeyres computation
+│   │   └── pipeline.py        # Orchestrator (calibrate → aggregate → index → upsert)
+│   ├── api/                   # FastAPI thin wrapper over Supabase PostgREST
+│   │   ├── main.py            # FastAPI app, CORS, rate limit, lifespan
+│   │   ├── config.py          # ApiSettings (API keys, rate limit, CORS)
+│   │   ├── dependencies.py    # Supabase httpx client + API key auth
+│   │   ├── models.py          # Pydantic response models
+│   │   └── routes/
+│   │       ├── apix.py        # /apix/* endpoints (latest, weekly, monthly, ...)
+│   │       └── health.py      # /health + /admin/coverage
+│   └── dashboard/             # Streamlit dashboard (deferred - not built)
 ├── tests/                     # pytest test suite
 ├── storage/                   # Token cache (JSON)
 ├── opencode.json              # MCP server config (Supabase)
 ├── .env                       # Secrets (gitignored)
 ├── requirements.txt
 ├── main.py
+├── api.Dockerfile             # API container image (binds $PORT)
+├── render.yaml                # Render Blueprint (API Web Service)
 ├── ROADMAP.md                 # Detailed phase plan
 └── AGENTS.md                  # This file
 ```
@@ -130,15 +144,19 @@ See `ROADMAP.md` for mathematical details on index construction.
 | 4S.1 | Settings & Dependencies (asyncpg, .env) | Completed |
 | 4S.2 | Supabase Sink (src/storage/supabase_sink.py) | Completed |
 | 4S.3 | MCP Server (opencode.json) | Completed |
-| 4S.4 | DDL Deployment | Pending (user action) |
-| 4S.5 | Schema Rewrite (new flight_quotes columns) | Planned |
-| 4S.6 | Interceptor Updates (ixigo.py, google_flights.py) | Planned |
-| 4S.7 | Pipeline Wiring (async_fetcher → SupabaseSink) | Planned |
-| 4S.8 | Index Construction (src/indexing/) | Planned |
-| 4S.9 | Test Rewrite | Planned |
-| 4S.10 | Docs & Cleanup (remove DuckDB) | Planned |
-| 5 | Index Construction (Jevons → Laspeyres) | Planned |
-| 6 | Dashboard & API | Planned |
+| 4S.4 | DDL Deployment | Completed |
+| 4S.5 | Schema Rewrite (flight_quotes columns) | Completed |
+| 4S.6 | Interceptor Updates (ixigo.py, google_flights.py) | Completed |
+| 4S.7 | Pipeline Wiring (async_fetcher → SupabaseSink) | Completed |
+| 4S.8 | Index Construction (base_calibrator, laspeyres_engine) | Completed |
+| 4S.9 | Test Rewrite | Completed |
+| 4S.10 | Docs & Cleanup (DuckDB removed) | Completed |
+| 4.3 | Truth Triangle Validation | Completed |
+| 4.4 | Sold-Out Imputation (Jevons Cell-Relative) | Completed |
+| 4.5 | Partitioned CSV Writer | Planned |
+| 5 | Index Construction (Jevons → Laspeyres) | Completed |
+| 6 | API (thin wrapper over Supabase PostgREST) | Completed |
+| 6 | Dashboard | Planned (deferred) |
 
 ## Supabase Connection
 

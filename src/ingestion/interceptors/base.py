@@ -5,11 +5,22 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import date, datetime, time as dtime
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import aiohttp
 
+from src.cleaning.schemas import (
+    FareClassEnum,
+    SourceEnum,
+    compute_data_hash,
+)
+
 logger = logging.getLogger(__name__)
+
+IST = ZoneInfo("Asia/Kolkata")
+UTC = ZoneInfo("UTC")
 
 
 @dataclass
@@ -42,34 +53,102 @@ class CapturedHeaders:
 class FlightData:
     """Standardized flight data record.
 
-    Matches the canonical schema defined in docs/DATA_SCHEMA_AND_EXTRACTION_SPEC.md.
-    Fields with None values indicate source-unavailable data (e.g., Google Flights
-    does not provide carrier_code or flight_number).
+    Mirrors the Supabase `flight_quotes` table (docs/
+    DATA_SCHEMA_AND_EXTRACTION_SPEC.md Section 8). Times are kept as
+    HH:MM strings until `to_quote_dict()` builds IST-aware datetimes.
+    Fields with None values indicate source-unavailable data (e.g.,
+    Google Flights does not provide carrier_code or flight_number).
     """
 
-    source: str
-    route: str
+    source_portal: str
     origin: str
     destination: str
-    flight_date: str
+    journey_date: str
+    advance_windows: int
     carrier_code: str | None
-    carrier_name: str
+    carrier: str
     flight_number: str | None
-    fare_class: str
+    journey_class: str
+    fare: float
     base_fare: float
-    tax_total: float
-    tax_breakdown_available: bool
     total_fare: float
-    currency: str
     departure_time: str
     arrival_time: str
     stops: int
-    duration_minutes: int | None
-    seat_remaining: int | None
-    is_refundable: bool
-    advance_window: int
+    fees: float = 0.0
+    tax_udf: float = 0.0
+    tax_asf: float = 0.0
+    tax_gst: float = 0.0
+    taxes: float = 0.0
+    duration_min: int | None = None
+    is_sold_out: bool = False
     capture_timestamp: float = field(default_factory=time.time)
     raw_data: dict[str, Any] = field(default_factory=dict)
+
+    def to_quote_dict(self) -> dict[str, Any]:
+        """Convert to a dict for SupabaseSink.upsert_flight_quotes().
+
+        Builds timezone-aware datetimes for `scraping_date_time`,
+        `departure`, and `arrival`, and computes `data_hash`.
+        Generated columns (route, core_fare, booking_date) are excluded.
+        """
+        journey_date = date.fromisoformat(self.journey_date)
+        dep_t = dtime.fromisoformat(self.departure_time)
+        arr_t = dtime.fromisoformat(self.arrival_time)
+        departure = datetime.combine(journey_date, dep_t, tzinfo=IST)
+        arrival = datetime.combine(journey_date, arr_t, tzinfo=IST)
+        if arrival < departure:
+            # Overnight flight — arrival is next day
+            arrival = datetime.combine(
+                journey_date.fromordinal(journey_date.toordinal() + 1),
+                arr_t,
+                tzinfo=IST,
+            )
+
+        scraping_dt = datetime.fromtimestamp(self.capture_timestamp, tz=UTC)
+        source_enum = SourceEnum(self.source_portal)
+        class_enum = FareClassEnum(self.journey_class.upper())
+        data_hash = compute_data_hash(
+            journey_date,
+            self.origin,
+            self.destination,
+            self.carrier_code,
+            self.flight_number,
+            class_enum.value,
+            self.total_fare,
+            source_enum.value,
+        )
+
+        return {
+            "quote_id": uuid.uuid4(),
+            "source_portal": source_enum.value,
+            "scraping_date_time": scraping_dt,
+            "journey_date": journey_date,
+            "origin": self.origin.upper(),
+            "destination": self.destination.upper(),
+            "advance_windows": self.advance_windows,
+            "carrier_code": (
+                self.carrier_code.upper() if self.carrier_code else None
+            ),
+            "carrier": self.carrier,
+            "flight_number": self.flight_number,
+            "journey_class": class_enum.value,
+            "fare": round(self.fare, 2),
+            "base_fare": round(self.base_fare, 2),
+            "fees": round(self.fees, 2),
+            "tax_udf": round(self.tax_udf, 2),
+            "tax_asf": round(self.tax_asf, 2),
+            "tax_gst": round(self.tax_gst, 2),
+            "taxes": round(self.taxes, 2),
+            "total_fare": round(self.total_fare, 2),
+            "departure": departure,
+            "arrival": arrival,
+            "duration_min": self.duration_min,
+            "stops": self.stops,
+            "is_sold_out": self.is_sold_out,
+            "is_imputed": False,
+            "data_hash": data_hash,
+        }
 
 
 class BaseInterceptor(ABC):

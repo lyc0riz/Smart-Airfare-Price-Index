@@ -1,0 +1,37 @@
+name: Deploy API (Render)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/api/**'
+      - 'api.Dockerfile'
+      - 'render.yaml'
+      - 'requirements.txt'
+
+concurrency:
+  group: deploy-api
+  cancel-in-progress: true
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run API tests
+        run: pytest tests/test_api_models.py tests/test_api_auth.py tests/test_api_routes.py -q
+
+      - name: Trigger Render deploy (deploy hook)
+        if: env.RENDER_DEPLOY_HOOK != ''
+        run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK"
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}

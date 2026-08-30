@@ -4,9 +4,13 @@ import asyncio
 import json
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from config.settings import get_settings
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def setup_logging(settings) -> None:
@@ -68,6 +72,105 @@ async def verify_playwright() -> bool:
         return False
 
 
+async def run_daily_pipeline(settings) -> dict:
+    """Run the full daily pipeline: ingest → validate → index.
+
+    Steps:
+    1. AsyncFetcher runs the 30-query matrix per source; flight quotes
+       are batch-upserted to Supabase automatically.
+    2. Imputation fills missing/sold-out cells using Jevons cell-relative method.
+    3. TruthTriangle runs cross-source fare parity for today.
+    4. LaspeyresEngine computes and stores the APIx per source portal
+       (auto-calibrates the base period on first run).
+    5. CSVWriter exports daily cleaned data to partitioned CSV files.
+
+    Args:
+        settings: Application settings instance.
+
+    Returns:
+        Combined pipeline summary dict.
+    """
+    logger = logging.getLogger(__name__)
+    from src.ingestion.async_fetcher import run_fetch
+    from src.storage.supabase_sink import SupabaseSink
+    from src.cleaning.imputer import run_imputation
+    from src.validation.truth_triangle import TruthTriangle
+    from src.indexing.laspeyres_engine import LaspeyresEngine
+
+    # 1. Ingestion (quotes persisted inside the fetcher)
+    fetch_summary = await run_fetch(
+        rate_limit=settings.RATE_LIMIT_PER_SECOND
+    )
+    logger.info(
+        f"Ingestion: {fetch_summary['successes']}/{fetch_summary['total_queries']} "
+        f"queries OK, {fetch_summary.get('quotes_upserted', 0)} quotes upserted"
+    )
+
+    sink = SupabaseSink()
+    await sink.connect()
+    try:
+        observation_date = datetime.now(IST).date()
+
+        # 2. Imputation (fills missing/sold-out cells)
+        imputation_results = await run_imputation(sink, observation_date)
+        total_imputed = sum(r.cells_imputed for r in imputation_results.values())
+        logger.info(f"Imputation: {total_imputed} cells imputed across sources")
+
+        # 3. Truth Triangle parity validation
+        triangle = TruthTriangle(sink)
+        parity = await triangle.run(observation_date)
+
+        # 4. APIx computation per portal
+        index_engine = LaspeyresEngine(sink)
+        indices = {}
+        for portal in ("Ixigo", "Google Flights"):
+            portal_flights = fetch_summary["sources"].get(portal, {}).get(
+                "flights", 0
+            )
+            if portal_flights > 0:
+                indices[portal] = await index_engine.compute_and_store(
+                    portal, observation_date
+                )
+            else:
+                logger.warning(
+                    f"No flights ingested from {portal}; index skipped"
+                )
+
+        return {
+            "observation_date": str(observation_date),
+            "ingestion": {
+                k: v
+                for k, v in fetch_summary.items()
+                if k != "results"
+            },
+            "imputation": {
+                portal: {
+                    "cells_checked": r.cells_checked,
+                    "cells_missing": r.cells_missing,
+                    "cells_imputed": r.cells_imputed,
+                    "cells_failed": r.cells_failed,
+                    "fallback_used": dict(r.fallback_used),
+                }
+                for portal, r in imputation_results.items()
+            },
+            "parity": {
+                "matched_pairs": parity.matched_pairs,
+                "agreed_pairs": parity.agreed_pairs,
+                "disparity_pairs": parity.disparity_pairs,
+                "agreement_rate": round(parity.agreement_rate, 4),
+            },
+            "indices": {
+                portal: {
+                    "cells_computed": s["cells_computed"],
+                    "overall_apix": s["overall_apix"],
+                }
+                for portal, s in indices.items()
+            },
+        }
+    finally:
+        await sink.close()
+
+
 async def main() -> None:
     """Main entry point for the APIx system."""
     settings = get_settings()
@@ -118,7 +221,13 @@ async def main() -> None:
         logger.info(f"  {route}: weight={config['weight']:.2f}")
 
     logger.info("=" * 60)
-    logger.info("System ready. Phases 2-6 implementation pending.")
+    logger.info("Starting daily APIx pipeline (ingest → validate → index)")
+
+    summary = await run_daily_pipeline(settings)
+
+    logger.info("=" * 60)
+    logger.info("Daily pipeline complete")
+    logger.info(json.dumps(summary, indent=2, default=str))
 
 
 if __name__ == "__main__":

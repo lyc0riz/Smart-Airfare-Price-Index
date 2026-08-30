@@ -19,6 +19,8 @@ python-dotenv>=1.0.0
 # API & Dashboard
 fastapi>=0.104.0
 uvicorn>=0.24.0
+httpx>=0.27.0
+slowapi>=0.1.9
 streamlit>=1.29.0
 plotly>=5.18.0
 

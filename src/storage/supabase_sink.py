@@ -41,6 +41,9 @@ class SupabaseSink:
                 min_size=2,
                 max_size=10,
                 command_timeout=30,
+                # Supabase pooler (PgBouncer transaction mode) does not
+                # support server-side prepared statements
+                statement_cache_size=0,
             )
             logger.info("Connected to Supabase PostgreSQL")
         except Exception as e:

@@ -27,8 +27,9 @@ class TestGoogleFlightsInterceptor:
         assert parsed is not None
         assert parsed.total_fare == 5750.0
         assert parsed.stops == 0
-        assert parsed.carrier_name == "IndiGo"
+        assert parsed.carrier == "IndiGo"
         assert parsed.carrier_code == "6E"
+        assert parsed.flight_number == "GF-6E-08:30-10:45"
         assert parsed.departure_time == "08:30"
         assert parsed.arrival_time == "10:45"
 
@@ -44,8 +45,21 @@ class TestGoogleFlightsInterceptor:
         parsed = gf._parse_aria_label(label, "DEL-BOM", "DEL", "BOM", "2026-09-01", 7)
         assert parsed is not None
         assert parsed.stops == 1
-        assert parsed.carrier_name == "Air India"
+        assert parsed.carrier == "Air India"
         assert parsed.carrier_code == "AI"
+
+    def test_parse_aria_label_unknown_airline_synthetic_number(self, gf):
+        """Unknown airline → 'NA' carrier code in synthetic flight number."""
+        label = (
+            "From 9,999 Indian rupees round trip total. "
+            "Nonstop flight with FlyUnknown. "
+            "Leaves A at 6:15 AM on Tuesday, September 1, 2026 "
+            "and arrives B at 8:20 AM on Tuesday, September 1, 2026."
+        )
+        parsed = gf._parse_aria_label(label, "DEL-BOM", "DEL", "BOM", "2026-09-01", 7)
+        assert parsed is not None
+        assert parsed.carrier_code is None
+        assert parsed.flight_number == "GF-NA-06:15-08:20"
 
     def test_parse_aria_label_invalid(self, gf):
         assert gf._parse_aria_label("random text", "DEL-BOM", "DEL", "BOM", "2026-09-01", 7) is None

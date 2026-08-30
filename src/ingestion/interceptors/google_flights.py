@@ -326,28 +326,32 @@ class GoogleFlightsInterceptor(BaseInterceptor):
             departure_time = self._parse_time_str(dep_time_str)
             arrival_time = self._parse_time_str(arr_time_str)
 
+            # Synthetic flight number: the DOM does not expose real flight
+            # numbers, so GF-{carrier_code}-{dep}-{arr} disambiguates quotes
+            # and prevents unique-constraint collisions on identical fares.
+            flight_number = (
+                f"GF-{carrier_code or 'NA'}-{departure_time}-{arrival_time}"
+            )
+
             return FlightData(
-                source="Google Flights",
-                route=route,
+                source_portal="Google Flights",
                 origin=origin,
                 destination=destination,
-                flight_date=flight_date,
+                journey_date=flight_date,
+                advance_windows=advance_window,
                 carrier_code=carrier_code,  # None for unknown airlines
-                carrier_name=airline_name,
-                flight_number=None,  # Not available in DOM
-                fare_class="ECONOMY",  # Only economy shown by default
+                carrier=airline_name,
+                flight_number=flight_number,
+                journey_class="ECONOMY",  # Only economy shown by default
+                fare=float(total_fare),
                 base_fare=float(total_fare),  # No tax breakdown
-                tax_total=0.0,
-                tax_breakdown_available=False,
+                taxes=0.0,
                 total_fare=float(total_fare),
-                currency="INR",
                 departure_time=departure_time,
                 arrival_time=arrival_time,
                 stops=stops,
-                duration_minutes=None,  # Not in aria-label
-                seat_remaining=None,  # Not in DOM
-                is_refundable=False,  # Not shown
-                advance_window=advance_window,
+                duration_min=None,  # Not in aria-label
+                is_sold_out=False,  # Sold-out flights not rendered in DOM
                 raw_data={"aria_label": label},
             )
 

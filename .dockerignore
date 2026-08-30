@@ -1,0 +1,17 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+tests/
+data/
+storage/
+.env
+.opencode/
+.github/
+docs/
+*.duckdb
+.pytest_cache/
+.git/
+api.Dockerfile
+render.yaml
+SECRETS.md
