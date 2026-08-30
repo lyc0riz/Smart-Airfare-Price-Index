@@ -16,6 +16,9 @@ concurrency:
 jobs:
   test-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v4
 
