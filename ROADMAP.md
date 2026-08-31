@@ -144,8 +144,10 @@ An automated, scalable, and ethically compliant data pipeline and index construc
   - Add boolean flag `is_imputed = TRUE` to imputed rows.
   - Integration in `main.py`: runs after ingestion, before Truth Triangle + Index.
 
-- [ ] **4.5 Partitioned CSV Writer**
-  - Create `src/cleaning/storage_writer.py` to append cleaned, validated records into daily CSV files: `data/processed/apix_clean_YYYY-MM-DD.csv`.
+- [x] **4.5 Partitioned CSV Writer** (removed)
+  - Originally planned `src/cleaning/storage_writer.py` to write daily CSVs.
+  - **Superseded:** Supabase PostgreSQL is now the sole production storage layer
+    (`supabase_sink.py`). Raw JSON lineage remains under `data/raw/YYYY-MM-DD/`.
 
 ---
 
@@ -168,8 +170,8 @@ Migrate from DuckDB local database to PostgreSQL on Supabase for production stor
   - Created `opencode.json` with Supabase MCP server config.
   - Enables natural language database queries from opencode after restart.
 
-- [ ] **4S.4 DDL Deployment** (user action)
-  - Paste DDL into Supabase SQL Editor.
+- [x] **4S.4 DDL Deployment**
+  - DDL deployed to Supabase (via MCP / SQL editor).
   - Creates: `flight_quotes`, `route_weights`, `advance_window_weights`, `base_period_prices`, `airfare_price_index` + 3 views.
   - DDL documented in `docs/DATA_SCHEMA_AND_EXTRACTION_SPEC.md` Section 8.
 
@@ -224,7 +226,7 @@ Migrate from DuckDB local database to PostgreSQL on Supabase for production stor
   - `src/indexing/jevons.py` — pure functions: `geometric_mean`, `aggregate_jevons`, `compute_cell_indices`, `compute_overall_apix`.
   - `src/indexing/pipeline.py` — `IndexPipeline` orchestrator (calibrate → aggregate → index → upsert), `run_all_portals()`.
   - Refactor `laspeyres_engine.py` to delegate to `jevons.py`.
-  - Tests: `test_jevons.py` (17), `test_pipeline.py` (7). Full suite: **122 passing**.
+  - Tests: `test_jevons.py` (17), `test_pipeline.py` (7). Full suite: **159 passing**.
 
 ---
 
@@ -246,3 +248,25 @@ Migrate from DuckDB local database to PostgreSQL on Supabase for production stor
 
 - [x] **6.3 Tests**
   - `test_api_models.py`, `test_api_auth.py`, `test_api_routes.py` (22 tests, mocked PostgREST).
+
+---
+
+## Phase 7: fareToken Investigation ✅ Concluded (dead end)
+
+Investigated whether the Ixigo `fareToken` string encodes a recoverable base-fare
+/ tax component, to enable tax decomposition in the index.
+
+- [x] **7.1 Captured 197 real fareToken strings** across 2 routes (DEL-BOM, BLR-MAA) on 2026-08-31.
+- [x] **7.2 Fully decoded the token structure**:
+  - Dual-delimiter string: pipe (`|`) for semantic fields, tilde (`~`) for a trailing numeric cluster.
+  - Pipe fields: `DEL|BOM|DDMMYY||1|0|0|e|INR|searchId$id|flightKeys|false|true|<tilde-cluster>`.
+  - Tilde cluster (positions): `[offerId(9-digit), displayFare, offerId2, offerId3, sessionId(constant across search), uuid]`.
+  - Position 1 == `displayFare` (the **total** fare). Verified on 195/197 tokens; the 2 mismatches are alternate
+    fare buckets with `seatRemaining: 0`.
+  - Positions 0/2/3 are large 9-digit internal offer IDs (~9.25M) — **NOT fares**.
+  - Position 4 is a constant, session-wide ID.
+- [x] **7.3 Conclusion:** The `fareToken` contains **no base fare / tax component**. Tax decomposition is not
+  recoverable from either Ixigo (search SSE) or Google Flights (DOM). The index uses **total fare**;
+  schema fields `tax_udf`, `tax_asf`, `tax_gst`, `fees`, `taxes`, `base_fare` remain `0.0` (rule N5).
+- [x] **7.4 Docs:** Full structure documented in `docs/DATA_SCHEMA_AND_EXTRACTION_SPEC.md` §2.3 and
+  `docs/portal-analysis/ixigo-response-structure.json`. One-off capture script removed after use.

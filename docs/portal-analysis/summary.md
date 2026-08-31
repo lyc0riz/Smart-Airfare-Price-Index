@@ -1,6 +1,6 @@
 # Portal Analysis Summary
 
-**Date:** 2026-08-25
+**Date:** 2026-08-25 (updated 2026-08-31)
 **Method:** Playwright headless browser with network interception
 
 ---
@@ -104,8 +104,43 @@ Heavy Akamai bot protection, React SPA, no stable URL patterns. Deferred to futu
 
 ## Implementation Decisions
 
-1. **Ixigo is primary source** — clean REST API, no auth barriers, SSE streaming for real-time data
+1. **Ixigo is primary source** — clean REST + SSE API, no auth barriers (static `apikey`), SSE streaming for real-time data
 2. **EaseMyTrip is fallback** — server-rendered, requires HTML parsing, less reliable for automation
 3. **IndiGo deferred** — too complex for initial implementation
-4. **Rate limit:** 1 req/sec/domain, exponential backoff on 429/5xx
+4. **Rate limit:** Ixigo throttled to 0.2 req/sec (5s spacing, returns 429 after ~12 req/15s); Google Flights at 1 req/sec
 5. **Token TTL:** 4 hours (Ixigo `apikey` is static, but `uuid`/`deviceid` should rotate periodically)
+
+## Google Flights (Secondary Source — Added)
+
+Since initial analysis, **Google Flights** was adopted as the secondary source (replacing EaseMyTrip as the
+active source for the pipeline, though EaseMyTrip remains a documented fallback).
+
+- **Method:** Playwright renders `https://www.google.com/travel/flights` results; data extracted from
+  `div.JMc5Xc[aria-label]` nodes via regex.
+- **Pros:** Reliable, no auth, ~50-120 flights/search.
+- **Cons:** No flight numbers (synthetic `GF-{carrier}-{dep}-{arr}` IDs generated), no seat/refund data,
+  no tax breakdown.
+- **aria-label pattern:**
+  ```
+  "From {price} Indian rupees round trip total. {stops_text} flight with {airline}.
+   Leaves {dep_airport} at {dep_time} on {dep_date} and arrives at {arr_airport}
+   at {arr_time} on {arr_date}."
+  ```
+
+## fareToken Finding (Verified 2026-08-31 — dead end for base fare)
+
+Ixigo's `fareToken` string was fully decoded from 197 real tokens (2 routes). It contains **no base fare or
+tax component** — position 1 equals `displayFare` (the total). See
+`docs/DATA_SCHEMA_AND_EXTRACTION_SPEC.md` §2.3.
+- Consequence: neither Ixigo (search SSE) nor Google Flights (DOM) can provide a tax breakdown.
+- Index uses **total fare**; `base_fare = total_fare`, taxes = 0.
+
+## Other Portal Research (deferred)
+
+- **Cleartrip:** Has the best tax breakdown, but only via a **B2B API that requires a partner agreement** —
+  not feasible for the hackathon. Would be the best candidate if tax decomposition ever becomes mandatory.
+- **Goibibo:** Developer API (`developer.goibibo.com`) is **dead** (portal "Temporarily unavailable", no
+  public API) — verified via web search (2026). Not usable.
+- **MakeMyTrip:** Heavy Akamai bot protection; skipped.
+- **Decision:** Two sources (Ixigo + Google Flights) suffice. Adding Cleartrip is **not worth it** for the
+  index, which uses total fare.

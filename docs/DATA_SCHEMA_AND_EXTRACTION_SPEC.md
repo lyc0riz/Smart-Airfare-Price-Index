@@ -147,6 +147,44 @@ r'From (\d+) Indian rupees round trip total\. (.+?) flight with (.+?)\.
 
 ---
 
+## 2.3 Ixigo fareToken Structure (fully decoded — no base fare)
+
+**Verified 2026-08-31** from 197 real `fareToken` strings captured across two routes (DEL-BOM, BLR-MAA).
+
+The `fareToken` is a **dual-delimiter** encoded string:
+- **Pipe (`|`)** separates semantic query/offer fields.
+- **Tilde (`~`)** separates a trailing numeric cluster.
+
+**Full structure:**
+
+```
+DEL|BOM|DDMMYY||1|0|0|e|INR|searchId$id|flightKeys|false|true|<tilde-cluster>
+```
+
+**Tilde cluster (positions documented against `displayFare`):**
+
+| Position | Meaning | Verified |
+|----------|---------|----------|
+| 0 | Large 9-digit internal **offer ID** (~9.25M) | NOT a fare |
+| 1 | **`displayFare`** — the TOTAL fare (base + taxes) | Matches `displayFare` on 195/197 tokens |
+| 2 | Large 9-digit internal **offer ID** | NOT a fare |
+| 3 | Large 9-digit internal **offer ID** | NOT a fare |
+| 4 | **Session ID** (constant across the whole search) | Constant |
+| 5 | UUID | — |
+
+**Key facts:**
+- Position 1 (`displayFare`) equals the total fare; the 2 mismatches are alternate fare buckets with
+  `seatRemaining: 0`.
+- Positions 0/2/3 are internal offer IDs (~9.25M), **not fares**.
+- Position 4 is a session-wide constant.
+- `fareDetails` contains only `displayFare`, `fareToken`, and rarely `slashedFare`.
+- **There is NO base fare / tax component in the token.** Tax decomposition is not recoverable from Ixigo.
+
+**Implication for the index:** The index uses **total fare**. `base_fare = total_fare`, and
+`tax_udf`/`tax_asf`/`tax_gst`/`fees`/`taxes` remain `0.0` (see normalization rule N5/N11).
+
+---
+
 ## 3. Normalization Rules
 
 | Rule | Description |
@@ -161,6 +199,7 @@ r'From (\d+) Indian rupees round trip total\. (.+?) flight with (.+?)\.
 | **N8** | Missing optional fields (`duration_min`, `carrier_code`) stored as `NULL`. Google Flights gets a synthetic flight number (see N10). |
 | **N9** | `data_hash` = SHA-256 of `{journey_date}:{origin}:{destination}:{carrier_code}:{flight_number}:{journey_class}:{total_fare}:{source_portal}`. |
 | **N10** | Google Flights synthetic flight number: `GF-{carrier_code|NA}-{HH:MM dep}-{HH:MM arr}` (e.g., `GF-6E-08:30-10:45`). The DOM does not expose real flight numbers; the synthetic ID disambiguates quotes and prevents unique-constraint collisions on identical fares. |
+| **N11** | The Ixigo `fareToken` contains NO base fare / tax component (verified 197 tokens, 2026-08-31 — see §2.3). Tax decomposition cannot be recovered from either source; the index uses **total fare**. |
 
 ---
 
@@ -332,6 +371,7 @@ CREATE TABLE IF NOT EXISTS airfare_price_index (
   index_value DECIMAL(10,2) NOT NULL,
   route_weight DECIMAL(5,4) NOT NULL,
   advance_window_weight DECIMAL(5,4) NOT NULL,
+  cell_weight DECIMAL(10,4) GENERATED ALWAYS AS (route_weight * advance_window_weight) STORED,
   fare DECIMAL(10,2) NOT NULL,
   base_fare DECIMAL(10,2) NOT NULL,
   base_period_fare DECIMAL(10,2) NOT NULL,
@@ -345,24 +385,24 @@ CREATE INDEX idx_airfare_index_route ON airfare_price_index(route);
 ### 8.6 Views
 
 ```sql
--- Weekly APIx aggregation
+-- Weekly APIx aggregation (normalized by total cell weight)
 CREATE OR REPLACE VIEW view_apix_weekly AS
 SELECT
   date_trunc('week', date) AS week_start,
   source_portal,
-  SUM(route_weight * advance_window_weight * index_value) AS apix_weekly,
+  SUM(index_value * cell_weight) / NULLIF(SUM(cell_weight), 0) AS apix_weekly,
   SUM(fare) AS total_fare,
   SUM(base_fare) AS total_base_fare,
   SUM(base_period_fare) AS total_base_period_fare
 FROM airfare_price_index
 GROUP BY date_trunc('week', date), source_portal;
 
--- Monthly APIx aggregation
+-- Monthly APIx aggregation (normalized by total cell weight)
 CREATE OR REPLACE VIEW view_apix_monthly AS
 SELECT
   date_trunc('month', date) AS month_start,
   source_portal,
-  SUM(route_weight * advance_window_weight * index_value) AS apix_monthly,
+  SUM(index_value * cell_weight) / NULLIF(SUM(cell_weight), 0) AS apix_monthly,
   SUM(fare) AS total_fare,
   SUM(base_fare) AS total_base_fare,
   SUM(base_period_fare) AS total_base_period_fare
@@ -418,3 +458,52 @@ ORDER BY a.origin, a.destination, a.advance_windows, a.date;
 **Generated columns** (don't send from Python): `route`, `core_fare`, `booking_date`
 
 **Dropped from schema:** `source_session_id`, `is_refundable`, `raw_payload`
+
+### 8.8 Row-Level Security (RLS) Policies
+
+Applied `2026-08-31` (migration `enable_rls_with_read_policies`).
+
+**Why:** With RLS disabled, anyone possessing the Supabase **anon key** could read **and write**
+every row. The anon key is publishable (safe to embed client-side), not a secret — so this was a
+read/write exposure if the key leaked.
+
+**Behavior after the change:**
+
+| Table | `anon` role | `service_role` / pipeline / API |
+|-------|-------------|--------------------------------|
+| `flight_quotes` | SELECT only | Full access (bypasses RLS) |
+| `route_weights` | SELECT only | Full access (bypasses RLS) |
+| `advance_window_weights` | SELECT only | Full access (bypasses RLS) |
+| `base_period_prices` | SELECT only | Full access (bypasses RLS) |
+| `airfare_price_index` | SELECT only | Full access (bypasses RLS) |
+
+Because the pipeline (asyncpg) and API (Supabase PostgREST) both authenticate with the
+**service_role** key, which bypasses RLS entirely, enabling RLS has **no impact** on them.
+The only behavioral change is that anon-key **writes** are now blocked.
+
+```sql
+-- 5 tables
+ALTER TABLE public.flight_quotes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.route_weights ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.advance_window_weights ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.base_period_prices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.airfare_price_index ENABLE ROW LEVEL SECURITY;
+
+-- anon read-only policies (one per table)
+CREATE POLICY "Allow anon read access"
+  ON public.flight_quotes FOR SELECT TO anon USING (true);
+CREATE POLICY "Allow anon read access"
+  ON public.route_weights FOR SELECT TO anon USING (true);
+CREATE POLICY "Allow anon read access"
+  ON public.advance_window_weights FOR SELECT TO anon USING (true);
+CREATE POLICY "Allow anon read access"
+  ON public.base_period_prices FOR SELECT TO anon USING (true);
+CREATE POLICY "Allow anon read access"
+  ON public.airfare_price_index FOR SELECT TO anon USING (true);
+```
+
+> **Note:** The three views (`view_apix_weekly`, `view_apix_monthly`,
+> `view_route_leadtime_elasticity`) are defined with the `SECURITY DEFINER` property (pre-existing).
+> This makes them run with the owner's privileges rather than the querying user's — independent of
+> RLS on the base tables, and not affected by this change.
+

@@ -73,7 +73,7 @@ Airfare Price Fetcher/
 │   ├── indexing/              # APIx index construction
 │   │   ├── base_calibrator.py # Jevons aggregates + base period
 │   │   ├── laspeyres_engine.py# Weighted Laspeyres index engine
-│   │   ├── jevons.py          # Pure Jevons + Laspeyres computation
+│   │   ├── jevons.py          # Pure Jevons + Laspeyres computation (geometric mean)
 │   │   └── pipeline.py        # Orchestrator (calibrate → aggregate → index → upsert)
 │   ├── api/                   # FastAPI thin wrapper over Supabase PostgREST
 │   │   ├── main.py            # FastAPI app, CORS, rate limit, lifespan
@@ -93,6 +93,7 @@ Airfare Price Fetcher/
 ├── api.Dockerfile             # API container image (binds $PORT)
 ├── render.yaml                # Render Blueprint (API Web Service)
 ├── ROADMAP.md                 # Detailed phase plan
+├── API_Design.md             # Full API reference + abundant curl examples
 └── AGENTS.md                  # This file
 ```
 
@@ -121,12 +122,25 @@ async def f(r, w):
 
 **How it works (Dual-Source):**
 
-1. **Ixigo (Primary):** Playwright harvests tokens → aiohttp makes direct API calls to SSE endpoint → 129 flights/search with flight numbers, seat inventory, cabin class
-2. **Google Flights (Secondary):** Playwright renders page → DOM extraction from `div.JMc5Xc` aria-labels → 114 flights/search, no flight numbers
-3. **Session Store:** Tokens cached in JSON with 4-hour TTL
-4. **Async Fetcher:** Runs 30 queries × 2 sources = 60 total fetches per cycle
-5. **Rate Limiting:** 1 req/sec/domain, exponential backoff on 429/5xx
-6. **Supabase PostgreSQL:** 5 tables + 3 views for persistent storage and index computation
+1. **Ixigo (Primary):** Playwright browser context is launched once; the SSE endpoint `GET /flights/v2/search/stream` is called via an in-browser `fetch()` (which carries the browser's cookies automatically). ~100-230 flights/search with flight numbers, seat inventory, cabin class. Cloudflare is handled by the real browser fingerprint.
+2. **Google Flights (Secondary):** Playwright renders the results page → DOM extraction from `div.JMc5Xc` aria-labels → ~50-120 flights/search, no flight numbers (synthetic `GF-*` IDs generated).
+3. **Session Store:** Tokens/device IDs cached in JSON with 4-hour TTL (Ixigo uses a static API key + generated device ID).
+4. **Async Fetcher:** Runs 30 queries × 2 sources = 60 total fetches per cycle.
+5. **Rate Limiting:** Ixigo is throttled to 0.2 req/sec (5s spacing) — its API returns HTTP 429 after ~12 requests/15s; Google Flights runs at 1 req/sec. Exponential backoff (5s→10s→20s→40s) on 429.
+6. **Supabase PostgreSQL:** 5 tables + 3 views for persistent storage and index computation.
+
+### Ixigo dual-path (curl_cffi vs Playwright)
+
+The interceptor supports **two** fetch paths for Ixigo:
+
+- **curl_cffi path (optimization):** Only used when the Playwright launch actually obtains a `cf_clearance` cookie from Cloudflare (`has_cf_clearance` is True). `cf_clearance` is bound to the resolving client's TLS/HTTP2 fingerprint, so the cookie is replayed with `curl_cffi` using `impersonate="chrome120"` and the same Chrome User-Agent.
+- **Playwright path (primary, and the one used in CI):** In GitHub Actions, headless Chromium on a cloud runner almost never gets a `cf_clearance` cookie, so `has_cf_clearance` is False and every query goes through `page.evaluate(fetch(...))` against the SSE endpoint from within the browser context. This is the path that produced the working pipeline runs.
+
+**Verified fact (2026-08-31):** The Ixigo SSE endpoint returns real `text/event-stream` data when the browser context carries Cloudflare cookies. The `displayFare` returned is the **total** fare (base + taxes); there is no tax breakdown in the search payload.
+
+### fareToken investigation (concluded — dead end)
+
+The Ixigo `fareToken` string was fully decoded from 197 real tokens across 2 routes (2026-08-31). It is a dual-delimiter string — pipe (`|`) for semantic fields and tilde (`~`) for a trailing numeric cluster — and contains **no base fare / tax component**. See `docs/DATA_SCHEMA_AND_EXTRACTION_SPEC.md` §2.3 for the full structure. The index therefore uses total fare; tax decomposition is not recoverable from either source.
 
 **Schema:** See `docs/DATA_SCHEMA_AND_EXTRACTION_SPEC.md` for canonical schema and Supabase DDL.
 
@@ -153,10 +167,11 @@ See `ROADMAP.md` for mathematical details on index construction.
 | 4S.10 | Docs & Cleanup (DuckDB removed) | Completed |
 | 4.3 | Truth Triangle Validation | Completed |
 | 4.4 | Sold-Out Imputation (Jevons Cell-Relative) | Completed |
-| 4.5 | Partitioned CSV Writer | Planned |
+| 4.5 | Partitioned CSV Writer | Removed (Supabase is sole storage) |
 | 5 | Index Construction (Jevons → Laspeyres) | Completed |
 | 6 | API (thin wrapper over Supabase PostgREST) | Completed |
 | 6 | Dashboard | Planned (deferred) |
+| 7 | fareToken Investigation (no base fare) | Completed (dead end) |
 
 ## Supabase Connection
 
@@ -175,6 +190,10 @@ SUPABASE_SERVICE_KEY=[service_role_key]
 **3 Views:** `view_apix_weekly`, `view_apix_monthly`, `view_route_leadtime_elasticity`
 
 **Base Period:** First scrape date (not fixed year-2015). Set in `base_period_prices` table.
+
+**Row Level Security (RLS):** Enabled on all 5 tables (2026-08-31). The `anon` key is **read-only** via
+SELECT policies; all writes require the `service_role` key. Pipeline (asyncpg) and API (PostgREST) use
+`service_role`, so RLS does not affect them. Policy DDL: see `docs/DATA_SCHEMA_AND_EXTRACTION_SPEC.md` §8.8.
 
 ## Future Phase Config (Preview)
 

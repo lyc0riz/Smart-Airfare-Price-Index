@@ -102,7 +102,7 @@
   },
   "notes": {
     "fare_breakdown": "NOT available in search results. displayFare is total fare (base + taxes). Tax breakdown requires a separate fare-details API call with fareToken.",
-    "fare_token": "Encoded string containing internal IDs and fare numbers. The tilde-separated numbers at the end appear to be: [internalId, displayFare, totalWithTaxes, totalWithTaxes2, baseComponent, uuid]. Not fully reverse-engineered.",
+    "fare_token": "Verified 2026-08-31 (197 tokens, 2 routes). Encoded string, dual-delimiter: pipe(|) for semantic fields, tilde(~) for trailing numeric cluster. Structure: DEL|BOM|DDMMYY||1|0|0|e|INR|searchId$id|flightKeys|false|true|<tilde-cluster>. The tilde cluster is [offerId(9-digit), displayFare, offerId2, offerId3, sessionId(constant across search), uuid]. Position 1 == displayFare (total fare). Positions 0/2/3 are large 9-digit internal offer IDs (~9.25M) — NOT fares. Position 4 is a constant session-wide ID. NO base fare / tax component is present in the token; base fare cannot be recovered from it. fareDetails contains only displayFare, fareToken, and rarely slashedFare.",
     "single_frame": "Despite being SSE, the entire response comes in ONE frame (~264KB). Not a true stream.",
     "airlines_in_response": "SG (SpiceJet), AI (Air India), QP (Akasa Air), IX (Air India Express), 6E (IndiGo)"
   }

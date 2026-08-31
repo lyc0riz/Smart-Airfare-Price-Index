@@ -101,5 +101,22 @@ The API is deployed as a **Render Web Service** (Docker) — see `render.yaml`.
 - The API listens on `$PORT` (set by Render) — see `api.Dockerfile`
 
 ### Verify
-- Live URL: `https://apix-api.onrender.com/api/v1/health`
-- Interactive docs: `https://apix-api.onrender.com/docs`
+- Live URL: `https://smart-airfare-price-index.onrender.com/api/v1/health`
+- Interactive docs: `https://smart-airfare-price-index.onrender.com/docs`
+
+## API Keys (for the thin-wrapper API)
+
+The API uses an `X-API-Key` header mapped to scopes via the `API_KEYS` environment variable
+(JSON: `{"web-key":"web","admin-key":"admin"}`). Set this in the Render service environment.
+Full endpoint documentation and usage examples: see `API_Design.md`.
+
+## Database Security (RLS)
+
+Row Level Security is **enabled** on all 5 tables (added 2026-08-31). The `anon` key has
+**read-only** access; all writes require the `service_role` key (used by the pipeline and API).
+The anon key therefore cannot modify or delete data even if it is leaked.
+
+- `SUPABASE_KEY` (anon): read-only via RLS policies
+- `SUPABASE_SERVICE_KEY`: full access (bypasses RLS) — treat as a secret; never expose client-side
+
+See `docs/DATA_SCHEMA_AND_EXTRACTION_SPEC.md` §8.8 for the policy DDL.

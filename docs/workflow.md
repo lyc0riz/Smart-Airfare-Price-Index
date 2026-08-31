@@ -6,8 +6,8 @@ The Real-Time Airfare Price Index (APIx) system implements a **hybrid parametric
 
 ### Core Design Principles
 
-- **Ethical scraping**: robots.txt compliance, 1 req/sec/domain, custom User-Agent (`MoSPI-APIx-Research-Bot/1.0`), research exemption logging
-- **Dual-source ingestion**: Ixigo (SSE API via Playwright-solved Cloudflare cookies replayed with curl_cffi, Playwright fallback) + Google Flights (DOM extraction via Playwright)
+- **Ethical scraping**: robots.txt compliance, per-source rate limiting (Ixigo 0.2 req/sec, Google Flights 1 req/sec), custom User-Agent (`MoSPI-APIx-Research-Bot/1.0`), research exemption logging
+- **Dual-source ingestion**: Ixigo (SSE API via Playwright in-browser fetch; curl_cffi replay only when a `cf_clearance` cookie is obtained) + Google Flights (DOM extraction via Playwright)
 - **Batch Supabase upsert**: Async PostgreSQL with `ON CONFLICT DO UPDATE` for idempotent deduplication
 - **Jevons → Laspeyres index**: Geometric mean elementary aggregates → weighted Laspeyres price index
 - **Truth Triangle validation**: Cross-source fare parity check (1% tolerance, Ixigo-preferred)
@@ -18,7 +18,7 @@ The Real-Time Airfare Price Index (APIx) system implements a **hybrid parametric
 |-------|--------------|
 | Runtime | Python 3.11+, `asyncio`, `pydantic` v2 |
 | Browser Automation | `playwright`, `playwright-stealth` |
-| HTTP | `aiohttp` + `curl-cffi` (Chrome-fingerprint replay for Ixigo), exponential backoff retry |
+| HTTP | `aiohttp` + `curl-cffi` (Chrome-fingerprint replay for Ixigo when `cf_clearance` obtained), exponential backoff retry |
 | Database | `asyncpg` (Supabase PostgreSQL), PgBouncer-compatible pool |
 | Computation | `pandas`, `numpy`, `scipy.stats.gmean` |
 | API/Dashboard | `fastapi`, `uvicorn`, `streamlit`, `plotly` |
@@ -41,7 +41,7 @@ The Real-Time Airfare Price Index (APIx) system implements a **hybrid parametric
 | **4S.6** | Interceptor Updates | ✅ Complete | `FlightData.to_quote_dict()`, synthetic `GF-*` flight numbers |
 | **4S.7** | Pipeline Wiring | ✅ Complete | `async_fetcher.py` batch upsert |
 | **4S.8** | Index Engine | ✅ Complete | `base_calibrator.py`, `laspeyres_engine.py` |
-| **4S.9** | Test Rewrite | ✅ Complete | 74 tests passing |
+| **4S.9** | Test Rewrite | ✅ Complete | 159 tests passing |
 | **4S.10** | Docs & Cleanup | ✅ Complete | DuckDB removed, docs updated |
 | **4.4** | Sold-Out Imputation | ✅ Complete | `src/cleaning/imputer.py` |
 | **4.5** | Partitioned CSV Writer | 🗑️ Removed | — |
@@ -61,12 +61,15 @@ main.py:run_daily_pipeline()
     ├─► QueryBuilder.generate_search_matrix()
     │       └─► 6 routes × 5 windows = 30 parametric queries
     │
-    ├─► AsyncFetcher.run()  (rate limit: 1 req/sec/domain)
+    ├─► AsyncFetcher.run()  (Ixigo 0.2 req/s, Google Flights 1 req/s)
     │       │
     │       ├─► IxigoInterceptor
-    │       │       ├─► Playwright stealth browser
-    │       │       ├─► TokenHarvester → SessionStore (4h TTL)
-    │       │       └─► page.evaluate(fetch()) to SSE endpoint
+    │       │       ├─► Playwright stealth browser  (Chromium headless)
+    │       │       ├─► ensure_cf_cookies() → cf_clearance? 
+    │       │       │       ├─► YES → search_flights_cffi (curl_cffi, chrome120)
+    │       │       │       └─► NO  → search_flights_playwright (page.evaluate(fetch))
+    │       │       │                (this is the CI path — no cf_clearance on cloud runners)
+    │       │       └─► page.evaluate(fetch()) to SSE endpoint /flights/v2/search/stream
     │       │
     │       ├─► GoogleFlightsInterceptor
     │       │       ├─► Playwright stealth browser
@@ -112,6 +115,10 @@ main.py:run_daily_pipeline()
 
 GitHub Actions (schedule: 30 8,20 * * *) → 2×/day at 2 AM & 2 PM IST
 ```
+
+> **Full methodology:** See `METHODOLOGY.md` (repo root) for the canonical reference to the
+> cell/weight model, Jevons/Laspeyres formulas, imputation, Truth Triangle, and weekly/monthly
+> aggregation. This diagram is the operational summary; the formulas live there.
 
 ---
 
@@ -200,7 +207,7 @@ playwright install chromium
 python main.py
 
 # Run tests
-pytest tests/ -v                    # All 74 tests
+pytest tests/ -v                    # All 159 tests
 pytest tests/test_laspeyres.py -v   # Index engine tests
 pytest tests/test_truth_triangle.py -v  # Parity validation tests
 
@@ -252,21 +259,17 @@ asyncio.run(t())
 
 ## 8. Next Steps (Planned Work)
 
-### Phase 4.4 — Sold-Out Imputation (`src/cleaning/imputer.py`)
-- **Cell-relative Jevons imputation**: For missing/sold-out slots in current day's matrix
-- **Growth factor**: $R_{c,t} = \left(\prod_{i=1}^{n} \frac{p_{i,t}}{p_{i,t-1}}\right)^{1/n}$ on matched available flights
-- **Hierarchical fallback**: Cell → Route → National → Last known price
-- **Flag**: `is_imputed = True`
+> Phases 4.4, 5, and 6 are **complete**. Remaining planned work is limited to the deferred dashboard.
 
-### Phase 5 — Index Pipeline Hardening (`src/indexing/`)
-- `jevons.py`: Standalone Jevons computation module
-- `pipeline.py`: Orchestrator (calibrate → aggregate → index → upsert)
-- Scheduling/cron integration
-
-### Phase 6 — Dashboard & API
-- **FastAPI** (`src/api/`): `/index`, `/quotes`, `/parity` endpoints
+### Dashboard — Planned (deferred)
 - **Streamlit** (`src/dashboard/`): Time-series charts, route drill-down, elasticity heatmap
 - Consumes `view_apix_weekly`, `view_apix_monthly`, `view_route_leadtime_elasticity`
+- Not yet built; the FastAPI backend that would serve it is complete (see §10 / `API_Design.md`)
+
+### Optional — Tax decomposition from a third source
+- Neither Ixigo (search SSE / `fareToken`) nor Google Flights (DOM) provides a tax breakdown
+  (Phase 7 concluded dead end). If ever required, candidates are Cleartrip B2B API (needs
+  partner agreement) or DGCA estimates — both out of scope for the hackathon.
 
 ---
 
@@ -306,6 +309,7 @@ Airfare Price Fetcher/
 │   ├── indexing/
 │   │   ├── base_calibrator.py   # Jevons aggregates + base period
 │   │   ├── laspeyres_engine.py  # Weighted Laspeyres index
+│   │   ├── jevons.py            # Pure Jevons + Laspeyres (geometric mean)
 │   │   └── pipeline.py          # Orchestrator + run_all_portals()
 │   ├── api/                     # FastAPI thin wrapper over Supabase PostgREST
 │   │   ├── main.py              # App, CORS, rate limit, lifespan
@@ -316,7 +320,7 @@ Airfare Price Fetcher/
 │   │       ├── apix.py          # /apix/* endpoints
 │   │       └── health.py        # /health + /admin/coverage
 │   └── dashboard/               # Streamlit app (deferred)
-├── tests/                       # 144 passing tests (122 + 22 API)
+├── tests/                       # 159 passing tests
 ├── storage/                     # Token cache (tokens.json)
 ├── main.py                      # Entry point + run_daily_pipeline()
 ├── requirements.txt
@@ -326,11 +330,13 @@ Airfare Price Fetcher/
 
 ---
 
-## 7. Thin-Wrapper API (Phase 6)
+## 10. Thin-Wrapper API (Phase 6) ✅ Complete
+
+> For the full, example-rich reference see **`API_Design.md`** in the repository root.
 
 The API is a **FastAPI thin wrapper** over Supabase PostgREST. It adds API-key auth, rate limiting, CORS, and standard response shaping on top of the auto-generated REST endpoints.
 
-### Endpoints
+### Endpoints (all under base path)
 
 | # | Method | Endpoint | Source | Auth Scope |
 |---|--------|----------|--------|-----------|
@@ -374,8 +380,9 @@ Errors:
 
 ### Deployment
 
-- `api.Dockerfile` (binds to `$PORT`) + `render.yaml` (Render Blueprint, region + free plan)
-- Deploy via **Render Web Service** — auto-deploy on push, plus GitHub Actions `api-deploy.yml`
+- `api.Dockerfile` (binds to `$PORT`) + `render.yaml` (Render Blueprint, free plan)
+- Deployed live at **`https://smart-airfare-price-index.onrender.com`**
+- Deploy via Render Web Service — auto-deploy on push, plus GitHub Actions `api-deploy.yml`
 - Render env vars set once: `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_SERVICE_KEY`, `API_KEYS`
 - OpenAPI docs auto-served at `/docs` after deploy
 
@@ -388,4 +395,4 @@ curl -H "X-API-Key: apix-web-dev-key" http://localhost:8000/api/v1/health
 
 ---
 
-*Last updated: 2026-08-30 | Pipeline status: Phases 1–5 complete | API: Phase 6 complete (thin wrapper, API-key auth, Render deployment)*
+*Last updated: 2026-08-31 | Pipeline status: Phases 1–5 complete | API: Phase 6 complete (thin wrapper, API-key auth, Render deployment) | Phase 7: fareToken investigation concluded (no base fare) | Read-only docs: see `API_Design.md` for the example-rich API reference*
