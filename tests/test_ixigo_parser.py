@@ -6,7 +6,6 @@ import pytest
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.ingestion.flare_solverr import FlareSolverrError
 from src.ingestion.interceptors.ixigo import IxigoInterceptor
 
 
@@ -159,41 +158,57 @@ class TestIxigoInterceptor:
         assert f.is_sold_out is False
 
 
-class TestIxigoFlareSolverr:
+class TestIxigoPlaywrightCffi:
     @pytest.fixture
     def ixigo_fs(self):
         return IxigoInterceptor()
 
+    def _mock_browser(self, ixigo_fs, cookies):
+        """Wire a fake Page/Context so ensure_cf_cookies can run."""
+        ixigo_fs._page = MagicMock()
+        ixigo_fs._page.goto = AsyncMock()
+        ixigo_fs._context = MagicMock()
+        ixigo_fs._context.cookies = AsyncMock(return_value=cookies)
+
     @pytest.mark.asyncio
-    async def test_ensure_cf_cookies_solves_once(self, ixigo_fs):
+    async def test_ensure_cf_cookies_caches(self, ixigo_fs):
         ixigo_fs._cleared_cookies = None
-        ixigo_fs._flaresolverr.solve_for_portal = AsyncMock(
-            return_value={"cf_clearance": "abc"}
-        )
+        self._mock_browser(ixigo_fs, [
+            {"name": "cf_clearance", "value": "abc"},
+        ])
 
         cookies = await ixigo_fs.ensure_cf_cookies()
         assert cookies == {"cf_clearance": "abc"}
-        # Second call uses the cleared cookie cache (no re-solve)
+        # Second call uses the cached cookie jar (no re-solve)
         await ixigo_fs.ensure_cf_cookies()
-        ixigo_fs._flaresolverr.solve_for_portal.assert_called_once()
+        ixigo_fs._context.cookies.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_ensure_cf_cookies_force_refresh(self, ixigo_fs):
         ixigo_fs._cleared_cookies = {"cf_clearance": "old"}
-        ixigo_fs._flaresolverr.solve_for_portal = AsyncMock(
-            return_value={"cf_clearance": "new"}
-        )
+        self._mock_browser(ixigo_fs, [
+            {"name": "cf_clearance", "value": "new"},
+        ])
 
         cookies = await ixigo_fs.ensure_cf_cookies(force_refresh=True)
         assert cookies == {"cf_clearance": "new"}
 
     @pytest.mark.asyncio
-    async def test_is_flaresolverr_available_delegates(self, ixigo_fs):
-        ixigo_fs._flaresolverr.is_available = AsyncMock(return_value=True)
-        assert await ixigo_fs.is_flaresolverr_available() is True
+    async def test_ensure_cf_cookies_start_browser_if_needed(self, ixigo_fs):
+        ixigo_fs._cleared_cookies = None
+        ixigo_fs._page = None
+        ixigo_fs.start_browser = AsyncMock()
+        ixigo_fs._context = MagicMock()
+        ixigo_fs._context.cookies = AsyncMock(return_value=[
+            {"name": "cf_clearance", "value": "abc"},
+        ])
+
+        await ixigo_fs.ensure_cf_cookies()
+
+        ixigo_fs.start_browser.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_search_flaresolverr_success(self, ixigo_fs):
+    async def test_search_cffi_success(self, ixigo_fs):
         # Build a small valid SSE payload
         payload = _make_sse_payload([{
             "flightDetails": [{
@@ -230,7 +245,7 @@ class TestIxigoFlareSolverr:
             "src.ingestion.interceptors.ixigo.AsyncSession",
             return_value=session,
         ):
-            flights = await ixigo_fs.search_flights_flaresolverr(
+            flights = await ixigo_fs.search_flights_cffi(
                 "DEL", "BOM", "01092026", 7
             )
 
@@ -239,7 +254,7 @@ class TestIxigoFlareSolverr:
         assert flights[0].total_fare == 5750.0
 
     @pytest.mark.asyncio
-    async def test_search_flaresolverr_403_returns_empty(self, ixigo_fs):
+    async def test_search_cffi_403_returns_empty(self, ixigo_fs):
         ixigo_fs.ensure_cf_cookies = AsyncMock(
             return_value={"cf_clearance": "stale"}
         )
@@ -257,7 +272,7 @@ class TestIxigoFlareSolverr:
             "src.ingestion.interceptors.ixigo.AsyncSession",
             return_value=session,
         ):
-            flights = await ixigo_fs.search_flights_flaresolverr(
+            flights = await ixigo_fs.search_flights_cffi(
                 "DEL", "BOM", "01092026", 7
             )
 

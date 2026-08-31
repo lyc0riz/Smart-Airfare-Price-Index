@@ -60,15 +60,6 @@ class Settings(BaseSettings):
     # Proxy configuration (for production)
     PROXY_URL: Optional[str] = None
 
-    # FlareSolverr (Cloudflare challenge solver)
-    # Docker service URL, e.g. http://localhost:8191 or
-    # http://flaresolverr:8191 inside a compose/GitHub Actions network.
-    FLARESOLVERR_URL: str = "http://localhost:8191"
-    # How long to wait for FlareSolverr's browser to solve the challenge.
-    FLARESOLVERR_TIMEOUT: int = 60
-    # Treat Ixigo as unreachable if FlareSolverr is unavailable (skip source).
-    FLARESOLVERR_REQUIRED: bool = False
-
     # CAPTCHA solving service (Tier 3 - future)
     TWOCAPTCHA_API_KEY: Optional[str] = None
 

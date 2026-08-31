@@ -40,45 +40,24 @@ SUPABASE_DB_URL=postgresql://postgres.xxx:password@aws-0-ap-northeast-1.pooler.s
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-
-# FlareSolverr (Cloudflare challenge solver) — optional, default localhost:8191
-FLARESOLVERR_URL=http://localhost:8191
-FLARESOLVERR_TIMEOUT=60
-FLARESOLVERR_REQUIRED=false
 ```
 
-## FlareSolverr (Ixigo Cloudflare bypass)
+## Ixigo Cloudflare handling
 
 Ixigo is protected by Cloudflare, which blocks headless Chromium on cloud
-runner IPs (GitHub Actions). To fetch Ixigo data, the pipeline uses
-**FlareSolverr**, a self-hosted Docker service that solves the Cloudflare JS
-challenge and returns a `cf_clearance` cookie, which is then replayed against
-Ixigo's SSE API.
+runner IPs (GitHub Actions). The pipeline handles this as follows:
 
-### In CI (GitHub Actions)
+1. **Playwright** navigates to the Ixigo homepage and waits for Cloudflare
+   to issue a `cf_clearance` cookie (cached for the run).
+2. **curl_cffi** replays those cookies against the SSE endpoint using
+   Chrome's TLS/HTTP2 fingerprint (`impersonate="chrome"`). curl_cffi is
+   required because Cloudflare binds the `cf_clearance` cookie to the TLS
+   fingerprint of the client that solved the challenge — aiohttp's fixed
+   fingerprint is rejected.
+3. If the cookie replay returns no results, the pipeline falls back to the
+   Playwright browser context.
 
-`daily-pipeline.yml` already declares a `flaresolverr` job service and sets
-`FLARESOLVERR_URL: http://flaresolverr:8191` — no secret required.
-
-### Local development
-
-Run FlareSolverr locally (requires Docker):
-```bash
-docker run -p 8191:8191 -e LOG_LEVEL=info ghcr.io/flaresolverr/flaresolverr:latest
-```
-Then leave `FLARESOLVERR_URL` as `http://localhost:8191` or set it to your
-instance.
-
-### Fallback behavior
-
-- If FlareSolverr returns cookies, Ixigo is fetched via **curl_cffi** using
-  Chrome's TLS/HTTP2 fingerprint (`impersonate="chrome"`). curl_cffi is required
-  because Cloudflare binds the `cf_clearance` cookie to the TLS fingerprint of
-  the client that solved the challenge — aiohttp's fixed fingerprint is rejected.
-- If FlareSolverr is unreachable/returns no data, the pipeline falls back to
-  the Playwright browser context.
-- Set `FLARESOLVERR_REQUIRED=true` to abort the run if FlareSolverr is missing
-  (not recommended for CI graceful degradation).
+No external service or secret is required for Ixigo Cloudflare bypass.
 
 ## Workflow Schedule
 

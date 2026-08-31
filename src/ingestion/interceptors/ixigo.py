@@ -7,6 +7,7 @@ Parses the confirmed SSE structure where each flightFare[] entry contains:
   - flightDetails[0]: airlineCode, headerTextWeb, subHeaderTextWeb, times, stops
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -17,10 +18,6 @@ from typing import Any, Optional
 import aiohttp
 from curl_cffi.requests import AsyncSession
 
-from src.ingestion.flare_solverr import (
-    FlareSolverrClient,
-    FlareSolverrError,
-)
 from src.ingestion.interceptors.base import (
     BaseInterceptor,
     FlightData,
@@ -28,6 +25,16 @@ from src.ingestion.interceptors.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+# User-Agent used by the Playwright browser context that solves the
+# Cloudflare challenge. curl_cffi must send the SAME User-Agent when
+# replaying the resulting cf_clearance cookie, because Cloudflare binds
+# the cookie to the User-Agent of the solving client.
+CHROME_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
 
 
 class IxigoConfig(InterceptorConfig):
@@ -43,9 +50,6 @@ class IxigoConfig(InterceptorConfig):
     APP_VERSION: str = "2"
     WEBAPP_VERSION: str = "2.78.1"
 
-    # FlareSolverr (Cloudflare challenge solver) config
-    flaresolverr_url: str = "http://localhost:8191"
-    flaresolverr_timeout: int = 60
     homepage_url: str = "https://www.ixigo.com"
 
 
@@ -53,9 +57,9 @@ class IxigoInterceptor(BaseInterceptor):
     """Ixigo flight data interceptor.
 
     Uses the SSE streaming endpoint to fetch real-time flight search results.
-    Two fetch modes:
-    1. aiohttp: Fast but blocked by Cloudflare (403) — used as fallback
-    2. Playwright: Full browser context with stealth — primary mode
+    Cloudflare clearance cookies are obtained via the Playwright browser
+    context (already launched for stealth), then replayed over curl_cffi
+    using Chrome's TLS/HTTP2 fingerprint.
 
     No login required — uses a static API key and generated device ID.
     """
@@ -64,7 +68,6 @@ class IxigoInterceptor(BaseInterceptor):
         self,
         config: Optional[IxigoConfig] = None,
         session_store=None,
-        flaresolverr_client: Optional[FlareSolverrClient] = None,
     ) -> None:
         self.ixigo_config = config or IxigoConfig()
         super().__init__(self.ixigo_config)
@@ -75,11 +78,6 @@ class IxigoInterceptor(BaseInterceptor):
         self._page = None
         self._cf_cookiesEstablished = False
         self._session_store = session_store
-        self._flaresolverr = flaresolverr_client or FlareSolverrClient(
-            base_url=self.ixigo_config.flaresolverr_url,
-            timeout=self.ixigo_config.flaresolverr_timeout,
-            session_store=session_store,
-        )
         self._cleared_cookies: Optional[dict[str, str]] = None
 
     async def build_search_headers(self) -> dict[str, str]:
@@ -427,52 +425,75 @@ class IxigoInterceptor(BaseInterceptor):
             self.logger.error(f"Parse error for {route}: {e}")
             return []
 
-    # ─── FlareSolverr-based fetch (primary mode) ─────────────────────────
+    # ─── curl_cffi-based fetch (primary mode) ──────────────────────────
 
     async def ensure_cf_cookies(
         self, force_refresh: bool = False
     ) -> dict[str, str]:
-        """Obtain Cloudflare clearance cookies via FlareSolverr.
+        """Obtain Cloudflare clearance cookies via the Playwright browser.
 
-        Returns cached cookies when available; otherwise asks
-        FlareSolverr to solve the Ixigo homepage challenge.
+        Navigates to the Ixigo homepage and waits for Cloudflare to issue
+        a ``cf_clearance`` cookie, then returns the full cookie jar from
+        the browser context. Cookies are cached for the run lifetime.
 
         Args:
             force_refresh: If True, skip cached cookies and re-solve.
 
         Returns:
-            Cookie dict (e.g. ``{"cf_clearance": "..."}``).
-
-        Raises:
-            FlareSolverrError: If no cached cookies exist and
-                FlareSolverr cannot solve the challenge.
+            Cookie dict (e.g. ``{"cf_clearance": "...", ...}``).
         """
         if self._cleared_cookies and not force_refresh:
             return self._cleared_cookies
-        cookies = await self._flaresolverr.solve_for_portal(
-            "Ixigo",
-            self.ixigo_config.homepage_url,
-            user_agent=self.config.user_agent,
-            force_refresh=force_refresh,
-        )
-        self._cleared_cookies = cookies
-        self.logger.info(
-            f"Obtained {len(cookies)} Cloudflare cookies via FlareSolverr"
-        )
-        return cookies
 
-    async def search_flights_flaresolverr(
+        if not self._page:
+            await self.start_browser()
+
+        self.logger.info(
+            "Solving Cloudflare challenge via Playwright (Ixigo homepage)..."
+        )
+        try:
+            await self._page.goto(
+                self.ixigo_config.homepage_url,
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            # Poll for the cf_clearance cookie (up to 30s).
+            cf_acquired = False
+            for _ in range(30):
+                cookies = await self._context.cookies()
+                if any(c["name"] == "cf_clearance" for c in cookies):
+                    cf_acquired = True
+                    break
+                await asyncio.sleep(1)
+            if not cf_acquired:
+                self.logger.warning(
+                    "Cloudflare cf_clearance cookie not observed after 30s; "
+                    "continuing with whatever cookies the context holds"
+                )
+            self._cleared_cookies = {
+                c["name"]: c["value"] for c in cookies
+            }
+        except Exception as e:
+            self.logger.warning(f"Playwright CF cookie acquisition failed: {e}")
+            self._cleared_cookies = {}
+
+        self.logger.info(
+            f"Obtained {len(self._cleared_cookies)} cookies via Playwright"
+        )
+        return self._cleared_cookies
+
+    async def search_flights_cffi(
         self,
         origin: str,
         destination: str,
         departure_date: str,
         advance_window: int,
     ) -> list[FlightData]:
-        """Search flights via curl_cffi using FlareSolverr-solved cookies.
+        """Search flights via curl_cffi using Playwright-solved cookies.
 
-        Solves the Cloudflare challenge once (cached for the run) and
-        replays the resulting ``cf_clearance`` cookies against the SSE
-        endpoint using curl_cffi with Chrome's TLS/HTTP2 fingerprint.
+        The Cloudflare challenge is solved once by the Playwright browser
+        (cached for the run) and the resulting cookies are replayed against
+        the SSE endpoint using curl_cffi with Chrome's TLS/HTTP2 fingerprint.
 
         curl_cffi is used (rather than aiohttp) because Cloudflare binds
         the clearance cookie to the TLS fingerprint of the client that
@@ -497,6 +518,10 @@ class IxigoInterceptor(BaseInterceptor):
             leave = departure_date
 
         headers = await self.build_search_headers()
+        # Cloudflare binds the cf_clearance cookie to the User-Agent of the
+        # solving client (the Playwright Chrome context). Replay with that
+        # same User-Agent so the cookie stays valid.
+        headers["user-agent"] = CHROME_USER_AGENT
         cookies = await self.ensure_cf_cookies()
         params = await self.build_search_params(
             origin, destination, departure_date, advance_window
@@ -505,11 +530,13 @@ class IxigoInterceptor(BaseInterceptor):
         params["leave"] = leave
 
         self.logger.info(
-            f"Searching {route} via FlareSolverr+cookies (date: {leave})"
+            f"Searching {route} via curl_cffi (date: {leave})"
         )
 
         try:
-            async with AsyncSession(impersonate="chrome") as session:
+            # chrome120 matches the Playwright context's Chrome/120 UA +
+            # TLS fingerprint that solved the challenge.
+            async with AsyncSession(impersonate="chrome120") as session:
                 response = await session.get(
                     self.ixigo_config.base_url,
                     headers=headers,
@@ -524,7 +551,7 @@ class IxigoInterceptor(BaseInterceptor):
                         text, route, origin, destination, advance_window
                     )
                     self.logger.info(
-                        f"FlareSolverr search {route}: {len(flights)} flights"
+                        f"curl_cffi search {route}: {len(flights)} flights"
                     )
                     return flights
 
@@ -542,28 +569,16 @@ class IxigoInterceptor(BaseInterceptor):
                     f"{(await response.atext())[:300]}"
                 )
                 return []
-        except FlareSolverrError as e:
-            self.logger.error(f"Cloudflare challenge failed for {route}: {e}")
-            return []
         except Exception as e:
             self.logger.error(f"Network error for {route}: {e}")
             return []
 
     # ─── Playwright-based fetch (fallback mode) ──────────────────────────
 
-    async def is_flaresolverr_available(self) -> bool:
-        """Report whether FlareSolverr appears reachable.
-
-        Returns:
-            True if FlareSolverr responds, else False.
-        """
-        return await self._flaresolverr.is_available()
-
     async def close(self) -> None:
-        """Close the interceptor and the FlareSolverr client."""
+        """Close the interceptor and stop the Playwright browser."""
         await super().close()
-        if self._flaresolverr:
-            await self._flaresolverr.close()
+        await self.stop_browser()
 
     async def start_browser(self) -> None:
         """Launch Playwright browser with stealth for Ixigo."""
@@ -579,11 +594,7 @@ class IxigoInterceptor(BaseInterceptor):
 
         stealth = Stealth()
         self._context = await self._browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
+            user_agent=CHROME_USER_AGENT,
             viewport={"width": 1920, "height": 1080},
             locale="en-IN",
         )
@@ -626,7 +637,6 @@ class IxigoInterceptor(BaseInterceptor):
                 wait_until="domcontentloaded",
                 timeout=30000,
             )
-            import asyncio
             await asyncio.sleep(3)
             self._cf_cookiesEstablished = True
             self.logger.info("Cloudflare session established")
@@ -702,12 +712,7 @@ class IxigoInterceptor(BaseInterceptor):
                 }}
             """)
 
-            # Parse SSE from raw text
-            import io
-            import aiohttp
-
-            # Create a mock response-like object for parse_response
-            # Actually, we can just parse the raw text directly
+            # Parse SSE from raw text directly
             flights = self._parse_sse_text(raw_sse, route, origin, destination, advance_window)
 
             self.logger.info(
