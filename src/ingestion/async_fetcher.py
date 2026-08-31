@@ -121,13 +121,24 @@ class AsyncFetcher:
         await self._rate_limit_wait()
 
         try:
-            flights = await self.ixigo_interceptor.search_flights_cffi(
-                origin, destination, departure_date, advance_window
-            )
+            # Only attempt the curl_cffi path if Cloudflare issued a
+            # cf_clearance cookie. If not, skip straight to the Playwright
+            # browser (which is already passing the challenge) — this avoids
+            # pointless 403s and halves the number of requests per query.
+            flights = []
+            if self.ixigo_interceptor.has_cf_clearance:
+                flights = await self.ixigo_interceptor.search_flights_cffi(
+                    origin, destination, departure_date, advance_window
+                )
 
             # If the cookie replay returned nothing (e.g. stale cookies),
             # fall back to the Playwright browser.
             if not flights:
+                # Space the two Ixigo requests apart to avoid tripping
+                # Ixigo's per-IP rate limiter (observed HTTP 429 when the
+                # curl_cffi and Playwright requests fire back-to-back).
+                if self.ixigo_interceptor.has_cf_clearance:
+                    await asyncio.sleep(2)
                 flights = await self.ixigo_interceptor.search_flights_playwright(
                     origin, destination, departure_date, advance_window
                 )
@@ -283,6 +294,17 @@ class AsyncFetcher:
             logger.info("Starting Ixigo ingestion (Playwright+curl_cffi)...")
             try:
                 await self.ixigo_interceptor.start_browser()
+                # Solve the Cloudflare challenge once up front, then decide
+                # which path to use for each query.
+                await self.ixigo_interceptor.ensure_cf_cookies()
+                if self.ixigo_interceptor.has_cf_clearance:
+                    logger.info(
+                        "cf_clearance obtained: using curl_cffi path"
+                    )
+                else:
+                    logger.warning(
+                        "No cf_clearance cookie: using Playwright path only"
+                    )
                 for i, query in enumerate(matrix):
                     result = await self._fetch_ixigo_one(query)
                     results.append(result)

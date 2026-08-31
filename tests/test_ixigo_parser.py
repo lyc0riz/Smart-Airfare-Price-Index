@@ -277,3 +277,19 @@ class TestIxigoPlaywrightCffi:
             )
 
         assert flights == []
+
+    def test_has_cf_clearance_false_when_empty(self, ixigo_fs):
+        ixigo_fs._cleared_cookies = {}
+        assert ixigo_fs.has_cf_clearance is False
+
+    def test_has_cf_clearance_false_when_none(self, ixigo_fs):
+        ixigo_fs._cleared_cookies = None
+        assert ixigo_fs.has_cf_clearance is False
+
+    def test_has_cf_clearance_true(self, ixigo_fs):
+        ixigo_fs._cleared_cookies = {"cf_clearance": "abc"}
+        assert ixigo_fs.has_cf_clearance is True
+
+    def test_has_cf_clearance_false_without_cf_key(self, ixigo_fs):
+        ixigo_fs._cleared_cookies = {"other": "x"}
+        assert ixigo_fs.has_cf_clearance is False

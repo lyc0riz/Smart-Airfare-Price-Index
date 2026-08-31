@@ -452,11 +452,22 @@ class IxigoInterceptor(BaseInterceptor):
             "Solving Cloudflare challenge via Playwright (Ixigo homepage)..."
         )
         try:
+            # First load the page to DOMContentLoaded so Cloudflare's
+            # interstitial JS (which runs the challenge) has a chance to
+            # execute, then wait for the network to settle which is when
+            # Cloudflare normally writes cf_clearance.
             await self._page.goto(
                 self.ixigo_config.homepage_url,
                 wait_until="domcontentloaded",
                 timeout=30000,
             )
+            try:
+                await self._page.wait_for_load_state(
+                    "networkidle", timeout=20000
+                )
+            except Exception:
+                pass  # networkidle may time out on long-polling pages
+
             # Poll for the cf_clearance cookie (up to 30s).
             cf_acquired = False
             for _ in range(30):
@@ -481,6 +492,11 @@ class IxigoInterceptor(BaseInterceptor):
             f"Obtained {len(self._cleared_cookies)} cookies via Playwright"
         )
         return self._cleared_cookies
+
+    @property
+    def has_cf_clearance(self) -> bool:
+        """True if a cf_clearance cookie was obtained from the Playwright context."""
+        return bool(self._cleared_cookies and "cf_clearance" in self._cleared_cookies)
 
     async def search_flights_cffi(
         self,
@@ -543,6 +559,7 @@ class IxigoInterceptor(BaseInterceptor):
                     params=params,
                     cookies=cookies,
                     timeout=self.config.request_timeout,
+                    stream=True,
                 )
 
                 if response.status_code == 200:
@@ -565,8 +582,7 @@ class IxigoInterceptor(BaseInterceptor):
                     return []
 
                 self.logger.error(
-                    f"HTTP {response.status_code} from {route}: "
-                    f"{(await response.atext())[:300]}"
+                    f"HTTP {response.status_code} from {route}"
                 )
                 return []
         except Exception as e:
@@ -637,6 +653,12 @@ class IxigoInterceptor(BaseInterceptor):
                 wait_until="domcontentloaded",
                 timeout=30000,
             )
+            try:
+                await self._page.wait_for_load_state(
+                    "networkidle", timeout=20000
+                )
+            except Exception:
+                pass  # networkidle may time out on long-polling pages
             await asyncio.sleep(3)
             self._cf_cookiesEstablished = True
             self.logger.info("Cloudflare session established")
@@ -695,15 +717,23 @@ class IxigoInterceptor(BaseInterceptor):
         self.logger.info(f"Searching {route} via Playwright (date: {leave})")
 
         try:
-            # Use page.evaluate to make fetch from browser context
+            # Use page.evaluate to make fetch from browser context.
+            # The browser carries Cloudflare cookies automatically; we
+            # must supply the Ixigo-specific API headers.  Note: the
+            # browser cannot set User-Agent or Referer via fetch()
+            # (forbidden headers), but it sends them natively.
             raw_sse = await self._page.evaluate(f"""
                 async () => {{
                     const resp = await fetch("{sse_url}", {{
                         headers: {{
                             "apikey": "{self.ixigo_config.API_KEY}",
                             "clientid": "{self.ixigo_config.CLIENT_ID}",
+                            "uuid": "{self._device_id}",
+                            "deviceid": "{self._device_id}",
                             "ixisrc": "{self.ixigo_config.IXI_SRC}",
                             "appversion": "{self.ixigo_config.APP_VERSION}",
+                            "x-request-webappversion": "{self.ixigo_config.WEBAPP_VERSION}",
+                            "content-type": "application/json; charset=UTF-8",
                             "accept": "text/event-stream, application/json",
                         }},
                     }});
