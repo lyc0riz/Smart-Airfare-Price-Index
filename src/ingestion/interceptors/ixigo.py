@@ -716,43 +716,66 @@ class IxigoInterceptor(BaseInterceptor):
 
         self.logger.info(f"Searching {route} via Playwright (date: {leave})")
 
-        try:
-            # Use page.evaluate to make fetch from browser context.
-            # The browser carries Cloudflare cookies automatically; we
-            # must supply the Ixigo-specific API headers.  Note: the
-            # browser cannot set User-Agent or Referer via fetch()
-            # (forbidden headers), but it sends them natively.
-            raw_sse = await self._page.evaluate(f"""
-                async () => {{
-                    const resp = await fetch("{sse_url}", {{
-                        headers: {{
-                            "apikey": "{self.ixigo_config.API_KEY}",
-                            "clientid": "{self.ixigo_config.CLIENT_ID}",
-                            "uuid": "{self._device_id}",
-                            "deviceid": "{self._device_id}",
-                            "ixisrc": "{self.ixigo_config.IXI_SRC}",
-                            "appversion": "{self.ixigo_config.APP_VERSION}",
-                            "x-request-webappversion": "{self.ixigo_config.WEBAPP_VERSION}",
-                            "content-type": "application/json; charset=UTF-8",
-                            "accept": "text/event-stream, application/json",
-                        }},
-                    }});
-                    if (!resp.ok) throw new Error("HTTP " + resp.status);
-                    return await resp.text();
-                }}
-            """)
+        # The JS fetch returns the HTTP status alongside the body so we can
+        # detect rate limiting (429) vs other failures for retry handling.
+        fetch_js = f"""
+            async () => {{
+                const resp = await fetch("{sse_url}", {{
+                    headers: {{
+                        "apikey": "{self.ixigo_config.API_KEY}",
+                        "clientid": "{self.ixigo_config.CLIENT_ID}",
+                        "uuid": "{self._device_id}",
+                        "deviceid": "{self._device_id}",
+                        "ixisrc": "{self.ixigo_config.IXI_SRC}",
+                        "appversion": "{self.ixigo_config.APP_VERSION}",
+                        "x-request-webappversion": "{self.ixigo_config.WEBAPP_VERSION}",
+                        "content-type": "application/json; charset=UTF-8",
+                        "accept": "text/event-stream, application/json",
+                    }},
+                }});
+                return {{ status: resp.status, body: await resp.text() }};
+            }}
+        """
 
-            # Parse SSE from raw text directly
-            flights = self._parse_sse_text(raw_sse, route, origin, destination, advance_window)
+        # Ixigo's API rate-limits per-IP (~1 req/sec).  On 429 we wait and
+        # retry with exponential backoff so a burst doesn't kill the whole
+        # batch.
+        max_attempts = 4
+        delay = 5.0
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = await self._page.evaluate(fetch_js)
+                status = result["status"]
+                if status == 200:
+                    flights = self._parse_sse_text(
+                        result["body"], route, origin, destination, advance_window
+                    )
+                    self.logger.info(
+                        f"Playwright search {route}: {len(flights)} flights"
+                    )
+                    return flights
 
-            self.logger.info(
-                f"Playwright search {route}: {len(flights)} flights"
-            )
-            return flights
+                if status == 429:
+                    if attempt < max_attempts:
+                        self.logger.warning(
+                            f"HTTP 429 from {route}, retrying in "
+                            f"{delay}s (attempt {attempt}/{max_attempts})"
+                        )
+                        await asyncio.sleep(delay)
+                        delay *= 2
+                        continue
+                    self.logger.error(
+                        f"HTTP 429 from {route} after {max_attempts} attempts"
+                    )
+                    return []
 
-        except Exception as e:
-            self.logger.error(f"Playwright search failed for {route}: {e}")
-            return []
+                raise RuntimeError(f"HTTP {status}")
+            except RuntimeError as e:
+                self.logger.error(f"Playwright search failed for {route}: {e}")
+                return []
+
+        self.logger.error(f"Exhausted retries for {route}")
+        return []
 
     def _parse_sse_text(
         self,

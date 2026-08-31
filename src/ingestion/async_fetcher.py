@@ -65,10 +65,15 @@ class AsyncFetcher:
         self.rate_limit_per_sec = rate_limit_per_sec
         self.sources = sources or ["Ixigo", "Google Flights"]
 
-        # Configure interceptors
+        # Configure interceptors.  Ixigo's API is stricter than Google
+        # Flights (returns HTTP 429 after ~12 requests / 15s), so give it a
+        # slower per-request rate (1 request every 5 seconds by default).
+        ixigo_rate = rate_limit_per_sec
+        if rate_limit_per_sec >= 1.0:
+            ixigo_rate = 0.2
         ixigo_config = IxigoConfig(
             base_url=IxigoConfig.base_url,
-            rate_limit_per_sec=rate_limit_per_sec,
+            rate_limit_per_sec=ixigo_rate,
         )
         self.ixigo_interceptor = IxigoInterceptor(
             ixigo_config, session_store=self.session_store
@@ -89,6 +94,23 @@ class AsyncFetcher:
         """Enforce rate limiting between requests."""
         now = time.time()
         min_interval = 1.0 / self.rate_limit_per_sec
+        elapsed = now - self._last_request_time
+        if elapsed < min_interval:
+            wait_time = min_interval - elapsed
+            await asyncio.sleep(wait_time)
+        self._last_request_time = time.time()
+
+    async def _rate_limit_wait_for(self, rate_limit_per_sec: float) -> None:
+        """Enforce a specific per-source rate limit between requests.
+
+        Keeps a per-source last-request timestamp so one source's rate
+        does not interfere with the other's.
+
+        Args:
+            rate_limit_per_sec: Requests per second for this source.
+        """
+        now = time.time()
+        min_interval = 1.0 / rate_limit_per_sec if rate_limit_per_sec > 0 else 0
         elapsed = now - self._last_request_time
         if elapsed < min_interval:
             wait_time = min_interval - elapsed
@@ -118,7 +140,9 @@ class AsyncFetcher:
         departure_date = query["departure_date"]
         advance_window = query["advance_window"]
 
-        await self._rate_limit_wait()
+        await self._rate_limit_wait_for(
+            self.ixigo_interceptor.config.rate_limit_per_sec
+        )
 
         try:
             # Only attempt the curl_cffi path if Cloudflare issued a

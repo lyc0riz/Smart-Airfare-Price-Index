@@ -75,3 +75,7 @@ class TestAsyncFetcherIxigo:
         fetcher.ixigo_interceptor.search_flights_playwright.assert_awaited_once()
         # Delay only applied when there was clearance (avoiding 429).
         sleep_mock.assert_awaited_once_with(2)
+
+    def test_ixigo_rate_slowed_when_global_fast(self):
+        f = AsyncFetcher(sources=["Ixigo"], persist_to_supabase=False)
+        assert f.ixigo_interceptor.config.rate_limit_per_sec == 0.2

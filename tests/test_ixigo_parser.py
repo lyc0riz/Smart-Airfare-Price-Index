@@ -293,3 +293,71 @@ class TestIxigoPlaywrightCffi:
     def test_has_cf_clearance_false_without_cf_key(self, ixigo_fs):
         ixigo_fs._cleared_cookies = {"other": "x"}
         assert ixigo_fs.has_cf_clearance is False
+
+    @pytest.mark.asyncio
+    async def test_playwright_retries_on_429(self, ixigo_fs):
+        """429 should trigger backoff retry and eventually succeed."""
+        payload = _make_sse_payload([{
+            "flightDetails": [{
+                "airlineCode": "6E",
+                "headerTextWeb": "IndiGo",
+                "subHeaderTextWeb": "6E101",
+                "departureTime": "08:30",
+                "arrivalTime": "10:45",
+                "duration": {"time": 135},
+                "stop": 0,
+            }],
+            "fares": [{
+                "fareDetails": {"displayFare": 5750},
+                "fareMetadata": [{"cabinClass": "ECONOMY", "seatRemaining": 12}],
+            }],
+            "flightKeys": ["DEL-BOM-6E101-01092026"],
+        }])
+        sse_body = f"data: {payload}"
+
+        ixigo_fs._page = MagicMock()
+        # First call returns 429, second returns 200.
+        ixigo_fs._page.evaluate = AsyncMock(
+            side_effect=[
+                {"status": 429, "body": "rate limited"},
+                {"status": 200, "body": sse_body},
+            ]
+        )
+        ixigo_fs._cf_cookiesEstablished = True
+
+        import asyncio
+        real_sleep = asyncio.sleep
+
+        async def fake_sleep(delay):
+            await real_sleep(0)
+
+        import src.ingestion.interceptors.ixigo as ixigo_mod
+        with patch.object(ixigo_mod.asyncio, "sleep", fake_sleep):
+            flights = await ixigo_fs.search_flights_playwright(
+                "DEL", "BOM", "01092026", 7
+            )
+
+        assert len(flights) == 1
+        assert flights[0].total_fare == 5750.0
+        assert ixigo_fs._page.evaluate.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_playwright_429_exhausts_retries(self, ixigo_fs):
+        """Persistent 429 after max attempts returns empty."""
+        ixigo_fs._page = MagicMock()
+        ixigo_fs._page.evaluate = AsyncMock(
+            return_value={"status": 429, "body": "rate limited"}
+        )
+        ixigo_fs._cf_cookiesEstablished = True
+
+        import asyncio
+        from unittest.mock import patch
+        import src.ingestion.interceptors.ixigo as ixigo_mod
+        with patch.object(ixigo_mod.asyncio, "sleep", AsyncMock()):
+            flights = await ixigo_fs.search_flights_playwright(
+                "DEL", "BOM", "01092026", 7
+            )
+
+        assert flights == []
+        # 4 attempts attempted.
+        assert ixigo_fs._page.evaluate.await_count == 4
