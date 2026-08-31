@@ -217,25 +217,19 @@ class TestIxigoFlareSolverr:
             return_value={"cf_clearance": "abc"}
         )
 
-        class FakeContent:
-            def __init__(self, body):
-                self._body = body.encode()
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.atext = AsyncMock(return_value=sse_body)
 
-            async def iter_any(self):
-                yield self._body
+        session = AsyncMock()
+        session.get.return_value = resp
+        session.__aenter__.return_value = session
+        session.__aexit__.return_value = False
 
-        resp = AsyncMock()
-        resp.status = 200
-        resp.content = FakeContent(sse_body)
-        get_cm = AsyncMock()
-        get_cm.__aenter__.return_value = resp
-        get_cm.__aexit__.return_value = False
-
-        session = MagicMock()
-        session.get.return_value = get_cm
-
-        with patch("src.ingestion.interceptors.ixigo.IxigoInterceptor._get_session",
-                   new=AsyncMock(return_value=session)):
+        with patch(
+            "src.ingestion.interceptors.ixigo.AsyncSession",
+            return_value=session,
+        ):
             flights = await ixigo_fs.search_flights_flaresolverr(
                 "DEL", "BOM", "01092026", 7
             )
@@ -250,18 +244,19 @@ class TestIxigoFlareSolverr:
             return_value={"cf_clearance": "stale"}
         )
 
-        resp = AsyncMock()
-        resp.status = 403
-        resp.text = AsyncMock(return_value="Forbidden")
-        get_cm = AsyncMock()
-        get_cm.__aenter__.return_value = resp
-        get_cm.__aexit__.return_value = False
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.atext = AsyncMock(return_value="Forbidden")
 
-        session = MagicMock()
-        session.get.return_value = get_cm
+        session = AsyncMock()
+        session.get.return_value = resp
+        session.__aenter__.return_value = session
+        session.__aexit__.return_value = False
 
-        with patch("src.ingestion.interceptors.ixigo.IxigoInterceptor._get_session",
-                   new=AsyncMock(return_value=session)):
+        with patch(
+            "src.ingestion.interceptors.ixigo.AsyncSession",
+            return_value=session,
+        ):
             flights = await ixigo_fs.search_flights_flaresolverr(
                 "DEL", "BOM", "01092026", 7
             )

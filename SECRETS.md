@@ -71,7 +71,10 @@ instance.
 
 ### Fallback behavior
 
-- If FlareSolverr returns cookies, Ixigo is fetched via direct aiohttp calls.
+- If FlareSolverr returns cookies, Ixigo is fetched via **curl_cffi** using
+  Chrome's TLS/HTTP2 fingerprint (`impersonate="chrome"`). curl_cffi is required
+  because Cloudflare binds the `cf_clearance` cookie to the TLS fingerprint of
+  the client that solved the challenge — aiohttp's fixed fingerprint is rejected.
 - If FlareSolverr is unreachable/returns no data, the pipeline falls back to
   the Playwright browser context.
 - Set `FLARESOLVERR_REQUIRED=true` to abort the run if FlareSolverr is missing

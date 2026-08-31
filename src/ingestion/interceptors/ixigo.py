@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import aiohttp
+from curl_cffi.requests import AsyncSession
 
 from src.ingestion.flare_solverr import (
     FlareSolverrClient,
@@ -467,10 +468,16 @@ class IxigoInterceptor(BaseInterceptor):
         departure_date: str,
         advance_window: int,
     ) -> list[FlightData]:
-        """Search flights via aiohttp using FlareSolverr-solved cookies.
+        """Search flights via curl_cffi using FlareSolverr-solved cookies.
 
         Solves the Cloudflare challenge once (cached for the run) and
-        replays the resulting cookies against the SSE endpoint.
+        replays the resulting ``cf_clearance`` cookies against the SSE
+        endpoint using curl_cffi with Chrome's TLS/HTTP2 fingerprint.
+
+        curl_cffi is used (rather than aiohttp) because Cloudflare binds
+        the clearance cookie to the TLS fingerprint of the client that
+        solved the challenge. aiohttp presents a fixed, non-browser TLS
+        signature which Cloudflare rejects even with a valid cookie.
 
         Args:
             origin: IATA origin code.
@@ -501,39 +508,44 @@ class IxigoInterceptor(BaseInterceptor):
             f"Searching {route} via FlareSolverr+cookies (date: {leave})"
         )
 
-        session = await self._get_session()
         try:
-            async with session.get(
-                self.ixigo_config.base_url,
-                headers=headers,
-                params=params,
-                cookies=cookies,
-            ) as response:
-                if response.status == 200:
-                    flights = await self.parse_response(
-                        response, route, advance_window
+            async with AsyncSession(impersonate="chrome") as session:
+                response = await session.get(
+                    self.ixigo_config.base_url,
+                    headers=headers,
+                    params=params,
+                    cookies=cookies,
+                    timeout=self.config.request_timeout,
+                )
+
+                if response.status_code == 200:
+                    text = await response.atext()
+                    flights = self._parse_sse_text(
+                        text, route, origin, destination, advance_window
                     )
                     self.logger.info(
                         f"FlareSolverr search {route}: {len(flights)} flights"
                     )
                     return flights
-                if response.status in (403, 503):
+
+                if response.status_code in (403, 503):
                     # Cookies may have expired mid-run — nudge refresh
                     # once and let the caller decide whether to retry.
                     self.logger.warning(
-                        f"HTTP {response.status} from {route}; cookies "
+                        f"HTTP {response.status_code} from {route}; cookies "
                         f"likely stale (cf_clearance refresh needed)"
                     )
                     return []
+
                 self.logger.error(
-                    f"HTTP {response.status} from {route}: "
-                    f"{(await response.text())[:300]}"
+                    f"HTTP {response.status_code} from {route}: "
+                    f"{(await response.atext())[:300]}"
                 )
                 return []
         except FlareSolverrError as e:
             self.logger.error(f"Cloudflare challenge failed for {route}: {e}")
             return []
-        except aiohttp.ClientError as e:
+        except Exception as e:
             self.logger.error(f"Network error for {route}: {e}")
             return []
 

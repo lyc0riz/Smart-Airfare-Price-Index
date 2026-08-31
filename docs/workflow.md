@@ -18,7 +18,7 @@ The Real-Time Airfare Price Index (APIx) system implements a **hybrid parametric
 |-------|--------------|
 | Runtime | Python 3.11+, `asyncio`, `pydantic` v2 |
 | Browser Automation | `playwright`, `playwright-stealth` |
-| HTTP | `aiohttp`, exponential backoff retry |
+| HTTP | `aiohttp` + `curl-cffi` (Chrome-fingerprint replay for Ixigo), exponential backoff retry |
 | Database | `asyncpg` (Supabase PostgreSQL), PgBouncer-compatible pool |
 | Computation | `pandas`, `numpy`, `scipy.stats.gmean` |
 | API/Dashboard | `fastapi`, `uvicorn`, `streamlit`, `plotly` |
