@@ -12,6 +12,24 @@ directly from the code.
 
 ---
 
+## Problem Statement
+
+This project implements the SIH problem statement:
+
+> *"Development of a Real-time Airfare Price Index for India through Automated Web
+> Scraping of Airline and Online Travel Aggregator Portals for Augmentation of the
+> Consumer Price Index (CPI)"*
+
+The full text (background, detailed description, expected solution, and the 30-day
+DGCA backtesting requirement) lives in `AGENTS.md` §Problem Statement.
+
+The core gap this system addresses: **manual CPI airfare collection cannot capture
+dynamic pricing** (200–400% intra-day fare variation by booking window, day-of-week,
+demand surges, festivals, and ATF-linked surcharges) on routes where 90%+ of domestic
+tickets are sold online.
+
+---
+
 ## 1. What the APIx Index Is
 
 APIx is a price index for air tickets on a fixed basket of Indian domestic routes,
