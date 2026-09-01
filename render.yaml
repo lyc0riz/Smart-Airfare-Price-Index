@@ -16,3 +16,15 @@ services:
         sync: false
     healthCheckPath: /api/v1/health
     autoDeploy: true
+  - type: static
+    name: apix-frontend
+    repo: https://github.com/lyc0riz/Smart-Airfare-Price-Index
+    plan: free
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    publishPath: dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://smart-airfare-price-index.onrender.com/api/v1
+      - key: VITE_API_KEY
+        sync: false
