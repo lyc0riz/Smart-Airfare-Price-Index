@@ -1,0 +1,127 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "APIx - Real-time Airfare Price Index API",
+    "version": "1.0.0",
+    "description": "Programmatic access to the APIx airfare price index. All endpoints require an X-API-Key header and are rate-limited to 100 req/min/IP."
+  },
+  "servers": [
+    { "url": "https://smart-airfare-price-index.onrender.com/api/v1" }
+  ],
+  "paths": {
+    "/apix/latest": {
+      "get": {
+        "tags": ["APEx"],
+        "summary": "Today's all-India APIx plus recent history",
+        "parameters": [
+          { "name": "portal", "in": "query", "required": false, "schema": { "type": "string", "default": "Ixigo" } }
+        ],
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/apix/weekly": {
+      "get": {
+        "tags": ["APEx"],
+        "summary": "Weekly aggregated index",
+        "parameters": [
+          { "name": "portal", "in": "query", "required": false, "schema": { "type": "string", "default": "Ixigo" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 52, "maximum": 104 } }
+        ],
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/apix/monthly": {
+      "get": {
+        "tags": ["APEx"],
+        "summary": "Monthly aggregated index",
+        "parameters": [
+          { "name": "portal", "in": "query", "required": false, "schema": { "type": "string", "default": "Ixigo" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 24, "maximum": 120 } }
+        ],
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/apix/by-route": {
+      "get": {
+        "tags": ["APEx"],
+        "summary": "Index contribution per route for a date",
+        "parameters": [
+          { "name": "date", "in": "query", "required": true, "schema": { "type": "string", "format": "date" } },
+          { "name": "portal", "in": "query", "required": false, "schema": { "type": "string", "default": "Ixigo" } }
+        ],
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/apix/heatmap": {
+      "get": {
+        "tags": ["APEx"],
+        "summary": "Route x advance-window index matrix for a date",
+        "parameters": [
+          { "name": "date", "in": "query", "required": true, "schema": { "type": "string", "format": "date" } },
+          { "name": "portal", "in": "query", "required": false, "schema": { "type": "string", "default": "Ixigo" } }
+        ],
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/apix/elasticity": {
+      "get": {
+        "tags": ["APEx"],
+        "summary": "Day-over-day change for a route and advance window",
+        "parameters": [
+          { "name": "route", "in": "query", "required": true, "schema": { "type": "string", "pattern": "^[A-Z]{3}-[A-Z]{3}$" } },
+          { "name": "window", "in": "query", "required": true, "schema": { "type": "integer", "minimum": 1, "maximum": 45 } },
+          { "name": "portal", "in": "query", "required": false, "schema": { "type": "string", "default": "Ixigo" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 30, "maximum": 90 } }
+        ],
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/apix/airlines": {
+      "get": {
+        "tags": ["APEx"],
+        "summary": "Average fare per airline on a route/date",
+        "parameters": [
+          { "name": "route", "in": "query", "required": true, "schema": { "type": "string", "pattern": "^[A-Z]{3}-[A-Z]{3}$" } },
+          { "name": "date", "in": "query", "required": true, "schema": { "type": "string", "format": "date" } },
+          { "name": "portal", "in": "query", "required": false, "schema": { "type": "string", "default": "Ixigo" } }
+        ],
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/admin/coverage": {
+      "get": {
+        "tags": ["System"],
+        "summary": "Scrape coverage and imputation stats per day/portal",
+        "parameters": [
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 14, "maximum": 90 } }
+        ],
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": ["System"],
+        "summary": "Service and database status",
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    }
+  }
+}

@@ -42,3 +42,30 @@ playwright-report/
 #session files
 session-ses_fc28.md
 session-v01.md
+
+# Frontend (Node)
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/.vite/
+frontend/.eslintcache
+
+# Concept dirs (don't commit)
+frontend1/
+frontend2/
+
+# Python caches
+.pytest_cache/
+.mypy_cache/
+.tox/
+.coverage/
+
+# Supabase local dev
+.supabase/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
