@@ -84,7 +84,12 @@ export function AirfareIndex() {
     { label: '30-Day Change', value: ((latest - monthAgo) / monthAgo) * 100, delta: true },
   ]
 
-  const rows = useMemo(() => routeTable(airlineCode), [airlineCode])
+  const rows = useMemo(() => {
+    const table = routeTable(airlineCode)
+    return routeCode !== 'ALL'
+      ? table.filter((row) => row.route === routeCode.replace('-', '–'))
+      : table
+  }, [airlineCode, routeCode])
 
   const filteredRows = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -288,7 +293,14 @@ export function AirfareIndex() {
                   <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
                   <XAxis
                     dataKey="date"
-                    tickFormatter={(value: string) => formatDate(value).replace(/ \d{4}$/, '')}
+                    tickFormatter={(value: string) => {
+                      if (frequency === 'monthly') return value.slice(0, 3) + ' ' + value.slice(5, 7)
+                      if (frequency === 'weekly') {
+                        const d = new Date(`${value}T00:00:00Z`)
+                        return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'UTC' })
+                      }
+                      return formatDate(value).replace(/, \d{4}$/, '').replace(/ \d{4}$/, '')
+                    }}
                     tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }}
                     stroke="hsl(var(--border))"
                     minTickGap={28}
@@ -378,9 +390,24 @@ export function AirfareIndex() {
             />
           </div>
 
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">Showing {pagedRows.length} of {filteredRows.length} routes</p>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            {routeCode !== 'ALL' ? (
+              <div className="inline-flex items-center gap-2 rounded-sm border border-border bg-muted/50 px-3 py-1.5 text-xs text-foreground">
+                <span className="font-medium">Filtered by {ROUTES.find((r) => r.code === routeCode)?.label}</span>
+                <button
+                  type="button"
+                  onClick={() => setRouteCode('ALL')}
+                  className="text-muted-foreground underline decoration-dotted hover:text-foreground"
+                  aria-label="Clear route filter"
+                >
+                  Clear
+                </button>
+              </div>
+            ) : (
+              <span />
+            )}
             <div className="flex items-center gap-2">
+              <p className="text-xs text-muted-foreground">Showing {pagedRows.length} of {filteredRows.length} routes</p>
               <Button variant="outline" size="sm" onClick={() => setPage(Math.max(currentPage - 1, 0))} disabled={currentPage === 0}>Previous</Button>
               <span className="text-xs text-muted-foreground">Page {currentPage + 1} of {pageCount}</span>
               <Button variant="outline" size="sm" onClick={() => setPage(Math.min(currentPage + 1, pageCount - 1))} disabled={currentPage >= pageCount - 1}>Next</Button>

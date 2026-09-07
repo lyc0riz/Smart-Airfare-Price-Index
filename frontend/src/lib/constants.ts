@@ -61,21 +61,12 @@ export const CITIES = [
 
 export const TOTAL_TRAFFIC = 152_400_000
 
-export const INDIA_OUTLINE: [number, number][] = [
-  [68.9, 23.7], [70.0, 20.8], [72.8, 19.1], [73.5, 15.9], [75.0, 12.0],
-  [77.5, 8.1], [80.3, 13.1], [80.2, 16.0], [84.8, 19.1], [87.0, 21.6],
-  [88.9, 21.7], [89.0, 25.3], [92.0, 24.0], [94.6, 27.0], [96.0, 27.5],
-  [97.4, 28.2], [95.0, 29.0], [92.0, 27.5], [88.9, 27.3], [85.0, 27.5],
-  [81.0, 30.3], [78.9, 31.5], [76.0, 32.5], [74.3, 34.7], [73.9, 32.8],
-  [71.0, 29.0], [70.0, 25.5], [68.9, 23.7],
-]
-
 export const MAP_WIDTH = 620
 export const MAP_HEIGHT = 660
 export const LON_MIN = 67.5
-export const LON_MAX = 98.5
-export const LAT_MIN = 6.5
-export const LAT_MAX = 36.5
+export const LON_MAX = 98.0
+export const LAT_MIN = 6.0
+export const LAT_MAX = 37.5
 
 export const BASE_PERIOD = 'January 2024 (monthly average)'
 export const LATEST_DATE = '2026-08-29'

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, waitFor } from '@testing-library/react'
 import { LineChart } from '../LineChart'
 import { BarChart } from '../BarChart'
 
@@ -9,36 +9,36 @@ const data = [
 ]
 
 describe('LineChart', () => {
-  it('renders chart wrapper with the expected series count', () => {
+  it('renders chart wrapper with the expected series count', async () => {
     const { container } = render(<LineChart data={data} xKey="date" yKeys={['index', 'second']} />)
-    expect(container.querySelector('.recharts-wrapper')).not.toBeNull()
+    await waitFor(() => expect(container.querySelector('.recharts-wrapper')).not.toBeNull())
     expect(container.querySelectorAll('.recharts-line')).toHaveLength(2)
   })
 
-  it('renders a reference line when requested', () => {
+  it('renders a reference line when requested', async () => {
     const { container } = render(
       <LineChart data={data} xKey="date" yKeys={['index']} showReferenceLine={{ y: 100, label: 'Base' }} />
     )
-    expect(container.querySelector('.recharts-reference-line')).not.toBeNull()
+    await waitFor(() => expect(container.querySelector('.recharts-reference-line')).not.toBeNull())
   })
 
-  it('supports custom formatters without crashing', () => {
+  it('supports custom formatters without crashing', async () => {
     const { container } = render(
       <LineChart data={data} xKey="date" yKeys={['index']} xFormatter={(v) => `D:${v}`} yFormatter={(v) => `${v}x`} />
     )
-    expect(container.querySelector('.recharts-wrapper')).not.toBeNull()
+    await waitFor(() => expect(container.querySelector('.recharts-wrapper')).not.toBeNull())
   })
 })
 
 describe('BarChart', () => {
-  it('renders bars for the requested keys', () => {
+  it('renders bars for the requested keys', async () => {
     const { container } = render(<BarChart data={data} xKey="date" yKeys={['index']} />)
-    expect(container.querySelector('.recharts-wrapper')).not.toBeNull()
-    expect(container.querySelectorAll('.recharts-rectangle')).not.toBeNull()
+    await waitFor(() => expect(container.querySelector('.recharts-wrapper')).not.toBeNull())
+    expect(container.querySelectorAll('.recharts-rectangle').length).toBeGreaterThan(0)
   })
 
-  it('renders stacked bars when configured', () => {
+  it('renders stacked bars when configured', async () => {
     const { container } = render(<BarChart data={data} xKey="date" yKeys={['index', 'second']} stacked />)
-    expect(container.querySelector('.recharts-wrapper')).not.toBeNull()
+    await waitFor(() => expect(container.querySelector('.recharts-wrapper')).not.toBeNull())
   })
 })

@@ -12,11 +12,7 @@ const NAV_ITEMS = [
   { path: '/route-analytics', label: 'Route Intelligence' },
   { path: '/price-trends', label: 'Price Trends' },
   { path: '/lead-time', label: 'Lead-Time Analysis' },
-  { path: '/backtesting', label: 'Backtesting' },
   { path: '/data-explorer', label: 'Data Explorer' },
-  { path: '/data-quality', label: 'Data Quality' },
-  { path: '/data-sources', label: 'Data Sources' },
-  { path: '/about-apix', label: 'About APIx' },
   { path: '/api-docs', label: 'API Docs' },
 ]
 

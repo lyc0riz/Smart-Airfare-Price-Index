@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../test/utils'
 import { AirfareIndex } from '../AirfareIndex'
 
 describe('AirfareIndex page', () => {
-  it('renders summary stats and a chart', () => {
+  it('renders summary stats and a chart', async () => {
     renderWithProviders(<AirfareIndex />)
     expect(screen.getAllByText(/Change/i).length).toBeGreaterThan(0)
-    expect(document.querySelector('.recharts-wrapper')).not.toBeNull()
+    await waitFor(() => expect(document.querySelector('.recharts-wrapper')).not.toBeNull())
   })
 
   it('renders sortable route tables', () => {
@@ -38,6 +38,33 @@ describe('AirfareIndex page', () => {
     const user = userEvent.setup()
     renderWithProviders(<AirfareIndex />)
     await user.selectOptions(screen.getByRole('combobox', { name: /Frequency/i }), 'weekly')
-    expect(document.querySelector('.recharts-wrapper')).not.toBeNull()
+    await waitFor(() => expect(document.querySelector('.recharts-wrapper')).not.toBeNull())
+  })
+
+  it('filters the route table by the selected route and shows a clear badge', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<AirfareIndex />)
+    expect(screen.getAllByRole('row').length).toBeGreaterThan(2)
+    await user.selectOptions(screen.getByRole('combobox', { name: /Route/i }), 'DEL-BOM')
+    const rows = screen.getAllByRole('row')
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toHaveTextContent('DEL–BOM')
+    expect(screen.getByText(/Filtered by DEL–BOM/)).toBeInTheDocument()
+  })
+
+  it('clears the route filter and restores the full table', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<AirfareIndex />)
+    await user.selectOptions(screen.getByRole('combobox', { name: /Route/i }), 'DEL-BLR')
+    expect(screen.getAllByRole('row')).toHaveLength(2)
+    await user.click(screen.getByRole('button', { name: /Clear route filter/i }))
+    expect(screen.getAllByRole('row').length).toBeGreaterThan(2)
+  })
+
+  it('switches the displayed route in the chart title', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<AirfareIndex />)
+    await user.selectOptions(screen.getByRole('combobox', { name: /Route/i }), 'BOM-BLR')
+    expect(screen.getAllByText(/BOM–BLR \(Mumbai–Bengaluru\)/).length).toBeGreaterThan(1)
   })
 })

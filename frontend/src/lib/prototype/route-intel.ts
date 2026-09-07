@@ -1,14 +1,9 @@
 import { ROUTES, routeTable, type RouteRow } from './apix-data'
-import { CITIES, TOTAL_TRAFFIC, MAP_WIDTH, MAP_HEIGHT, LON_MIN, LON_MAX, LAT_MIN, LAT_MAX } from '../constants'
+import { CITIES, TOTAL_TRAFFIC } from '../constants'
+
+export { project } from '../map/geo'
 
 export type City = { code: string; name: string; lat: number; lon: number }
-
-export function project(lon: number, lat: number): { x: number; y: number } {
-  return {
-    x: ((lon - LON_MIN) / (LON_MAX - LON_MIN)) * MAP_WIDTH,
-    y: MAP_HEIGHT - ((lat - LAT_MIN) / (LAT_MAX - LAT_MIN)) * MAP_HEIGHT,
-  }
-}
 
 export type RouteIntel = RouteRow & {
   code: string

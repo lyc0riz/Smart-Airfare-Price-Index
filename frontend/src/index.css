@@ -27,6 +27,8 @@
     --saffron-foreground: 0 0% 100%;
     --navy: 210 100% 15%;
     --navy-foreground: 0 0% 100%;
+    --map-land: 214 32% 93%;
+    --map-land-stroke: 215 20% 74%;
     --radius: 0.375rem;
   }
 
@@ -54,6 +56,8 @@
     --saffron-foreground: 0 0% 100%;
     --navy: 210 100% 15%;
     --navy-foreground: 0 0% 100%;
+    --map-land: 217 33% 13%;
+    --map-land-stroke: 216 24% 32%;
   }
 }
 
