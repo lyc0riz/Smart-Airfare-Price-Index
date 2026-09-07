@@ -25,14 +25,14 @@ export function Header() {
     <header className="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-40">
       <div className="container-gov">
         <div className="flex h-16 items-center justify-between gap-4">
-          <Link to="/" className="flex items-center gap-2 font-serif text-xl font-bold text-foreground" aria-label="APIx Home">
+          <Link to="/" className="flex items-center gap-2 font-serif text-xl font-bold text-foreground" aria-label="FlyIndex India Home">
             <span className="flex h-7 w-7 items-center justify-center rounded-sm bg-primary text-primary-foreground">
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3z" />
                 <path d="M12 2.18l6 2.25v4.66c0 4.14-2.73 8.01-6 9.08-3.27-1.07-6-4.94-6-9.08V6.43l6-2.25z" />
               </svg>
             </span>
-            <span className="hidden sm:block">APIx</span>
+            <span className="hidden sm:block">FlyIndex India</span>
           </Link>
 
           <nav className="hidden md:flex items-center gap-1" aria-label="Main navigation">

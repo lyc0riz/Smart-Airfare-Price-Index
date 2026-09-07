@@ -8,7 +8,7 @@ export function Footer() {
       <div className="container-gov py-8">
         <div className="grid gap-6 md:grid-cols-4">
           <div>
-            <p className="font-serif text-lg font-bold text-foreground">APIx</p>
+            <p className="font-serif text-lg font-bold text-foreground">FlyIndex India</p>
             <p className="mt-2 text-sm text-muted-foreground">
               Real-time Airfare Price Index for India
             </p>
@@ -41,7 +41,7 @@ export function Footer() {
           <div>
             <h4 className="font-semibold text-foreground">Resources</h4>
             <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
-              <li><Link to="/about-apix" className="hover:text-foreground">About APIx</Link></li>
+              <li><Link to="/about-apix" className="hover:text-foreground">About FlyIndex India</Link></li>
               <li><Link to="/data-sources" className="hover:text-foreground">Methodology</Link></li>
               <li><Link to="/api-docs" className="hover:text-foreground">API Documentation</Link></li>
               <li><Link to="/data-quality" className="hover:text-foreground">Data Quality</Link></li>
@@ -54,7 +54,7 @@ export function Footer() {
             &copy; {year} Ministry of Statistics & Programme Implementation, Government of India.
           </p>
           <p className="text-xs text-muted-foreground">
-            APIx is an experimental statistical indicator platform. Not official statistics.
+            FlyIndex India is an experimental statistical indicator platform. Not official statistics.
           </p>
         </div>
       </div>
