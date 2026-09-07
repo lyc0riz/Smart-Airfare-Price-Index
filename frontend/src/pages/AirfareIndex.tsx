@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { LineChart as RechartsLineChart, Line, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ArrowDownRight, ArrowRight, ArrowUpRight, Download, Info, Minus, Search, SlidersHorizontal } from 'lucide-react'
+import { ArrowDownRight, ArrowRight, ArrowUpRight, Download, Info, Minus, SlidersHorizontal } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import { Select } from '../components/ui/Select'
 import { Table } from '../components/ui/Table'
@@ -9,6 +9,7 @@ import { Link } from 'react-router-dom'
 import { formatDate, formatINR, pct, cn } from '../lib/utils'
 import { ROUTES, AIRLINES, RANGE_OPTIONS, BASE_PERIOD, LATEST_DATE, buildSeries, aggregate, routeTable, type RouteRow } from '../lib/prototype/apix-data'
 import type { RangeKey } from '../lib/constants'
+import { RouteSearchInput, filterRoutes } from '../components/search'
 
 const FREQUENCIES = ['daily', 'weekly', 'monthly'] as const
 const PAGE_SIZE = 5
@@ -31,7 +32,7 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: { paylo
       <p className="font-semibold text-foreground">{formatDate(point.date)}</p>
       <dl className="mt-2 space-y-1">
         <div className="flex justify-between gap-6">
-          <dt className="text-muted-foreground">APIx</dt>
+          <dt className="text-muted-foreground">FlyIndex India</dt>
           <dd className="tabular-nums font-medium text-foreground">{point.index.toFixed(2)}</dd>
         </div>
         <div className="flex justify-between gap-6">
@@ -84,16 +85,10 @@ export function AirfareIndex() {
     { label: '30-Day Change', value: ((latest - monthAgo) / monthAgo) * 100, delta: true },
   ]
 
-  const rows = useMemo(() => {
-    const table = routeTable(airlineCode)
-    return routeCode !== 'ALL'
-      ? table.filter((row) => row.route === routeCode.replace('-', '–'))
-      : table
-  }, [airlineCode, routeCode])
+  const rows = useMemo(() => routeTable(airlineCode), [airlineCode])
 
   const filteredRows = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    const list = rows.filter((row) => row.route.toLowerCase().includes(q))
+    const list = filterRoutes(rows, query)
     return [...list].sort((a, b) => {
       const av = a[sortKey]
       const bv = b[sortKey]
@@ -144,10 +139,10 @@ export function AirfareIndex() {
               <h1 className="text-3xl font-bold text-foreground md:text-4xl">
                 Airfare Price Index
               </h1>
-              <span className="group relative mt-2 inline-flex" tabIndex={0} role="note" aria-label="APIx measures changes in observed domestic airfare prices relative to the selected base period.">
+              <span className="group relative mt-2 inline-flex" tabIndex={0} role="note" aria-label="FlyIndex India measures changes in observed domestic airfare prices relative to the selected base period.">
                 <Info className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                 <span className="pointer-events-none absolute left-0 top-6 z-20 w-72 rounded-sm border border-border bg-card p-3 text-xs text-muted-foreground opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus:opacity-100">
-                  APIx measures changes in observed domestic airfare prices relative to the selected base period.
+                  FlyIndex India measures changes in observed domestic airfare prices relative to the selected base period.
                 </span>
               </span>
             </div>
@@ -155,7 +150,7 @@ export function AirfareIndex() {
               Monitoring movements in domestic airfare prices across India
             </p>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              APIx tracks changes in observed domestic airfare prices relative to a defined base period.
+              FlyIndex India tracks changes in observed domestic airfare prices relative to a defined base period.
             </p>
 
             <dl className="mt-6 grid gap-px overflow-hidden rounded-sm border border-border bg-border sm:grid-cols-2 lg:grid-cols-5">
@@ -180,7 +175,7 @@ export function AirfareIndex() {
           <h2 id="summary-heading" className="sr-only">Index summary</h2>
           <div className="grid gap-8 border-b border-border pb-8 lg:grid-cols-[minmax(0,20rem)_1fr] lg:items-end">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Current APIx</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Current FlyIndex India</p>
               <p className="mt-2 font-serif text-5xl font-bold tabular-nums text-foreground">{latest.toFixed(2)}</p>
               <p className="mt-1 text-sm text-muted-foreground">
                 <Delta value={latest - 100} className="font-medium text-foreground" /> from base period
@@ -293,14 +288,7 @@ export function AirfareIndex() {
                   <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
                   <XAxis
                     dataKey="date"
-                    tickFormatter={(value: string) => {
-                      if (frequency === 'monthly') return value.slice(0, 3) + ' ' + value.slice(5, 7)
-                      if (frequency === 'weekly') {
-                        const d = new Date(`${value}T00:00:00Z`)
-                        return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'UTC' })
-                      }
-                      return formatDate(value).replace(/, \d{4}$/, '').replace(/ \d{4}$/, '')
-                    }}
+                    tickFormatter={(value: string) => formatDate(value).replace(/ \d{4}$/, '')}
                     tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }}
                     stroke="hsl(var(--border))"
                     minTickGap={28}
@@ -343,7 +331,7 @@ export function AirfareIndex() {
               lower levels.
             </p>
             <p className="mt-2 text-sm text-foreground">
-              <span className="font-semibold">Example — APIx = 110:</span>{' '}
+              <span className="font-semibold">Example — FlyIndex India = 110:</span>{' '}
               <span className="text-muted-foreground">Airfare prices are approximately 10% higher than the base-period level.</span>
             </p>
           </div>
@@ -356,18 +344,13 @@ export function AirfareIndex() {
               <h2 id="routes-heading" className="text-lg font-semibold text-foreground">Route-wise Airfare Movement</h2>
               <p className="text-sm text-muted-foreground">Index levels and movements for major city-pair routes.</p>
             </div>
-            <div className="relative">
-              <label htmlFor="route-search" className="sr-only">Search routes</label>
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-              <input
-                id="route-search"
-                type="search"
-                value={query}
-                onChange={(e) => { setQuery(e.target.value); setPage(0); }}
-                placeholder="Search route"
-                className="h-9 w-56 rounded-sm border border-border bg-background pl-8 pr-3 text-sm text-foreground"
-              />
-            </div>
+            <RouteSearchInput
+              value={query}
+              onChange={(val) => {
+                setQuery(val)
+                setPage(0)
+              }}
+            />
           </div>
 
           <div className="mt-4 overflow-x-auto rounded-sm border border-border">
@@ -386,28 +369,17 @@ export function AirfareIndex() {
               sortKey={sortKey}
               sortDirection={sortAsc ? 'asc' : 'desc'}
               onSort={toggleSort}
-              emptyMessage="No routes match your search."
+              emptyMessage={
+                query.trim()
+                  ? `No matching routes found for "${query.trim()}".`
+                  : 'No routes match your search.'
+              }
             />
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-            {routeCode !== 'ALL' ? (
-              <div className="inline-flex items-center gap-2 rounded-sm border border-border bg-muted/50 px-3 py-1.5 text-xs text-foreground">
-                <span className="font-medium">Filtered by {ROUTES.find((r) => r.code === routeCode)?.label}</span>
-                <button
-                  type="button"
-                  onClick={() => setRouteCode('ALL')}
-                  className="text-muted-foreground underline decoration-dotted hover:text-foreground"
-                  aria-label="Clear route filter"
-                >
-                  Clear
-                </button>
-              </div>
-            ) : (
-              <span />
-            )}
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">Showing {pagedRows.length} of {filteredRows.length} routes</p>
             <div className="flex items-center gap-2">
-              <p className="text-xs text-muted-foreground">Showing {pagedRows.length} of {filteredRows.length} routes</p>
               <Button variant="outline" size="sm" onClick={() => setPage(Math.max(currentPage - 1, 0))} disabled={currentPage === 0}>Previous</Button>
               <span className="text-xs text-muted-foreground">Page {currentPage + 1} of {pageCount}</span>
               <Button variant="outline" size="sm" onClick={() => setPage(Math.min(currentPage + 1, pageCount - 1))} disabled={currentPage >= pageCount - 1}>Next</Button>
@@ -463,8 +435,8 @@ export function AirfareIndex() {
                 <p className="mt-2 text-sm text-muted-foreground">Observed airfares and DGCA passenger traffic statistics collected from primary sources without modification.</p>
               </div>
               <div className="rounded-sm border border-border bg-background p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-saffron">APIx Calculated Indicator</p>
-                <p className="mt-2 text-sm text-muted-foreground">Index values derived by MoSPI from cleaned source data using the published APIx methodology.</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-saffron">FlyIndex India Indicator</p>
+                <p className="mt-2 text-sm text-muted-foreground">Index values derived by MoSPI from cleaned source data using the published FlyIndex India methodology.</p>
               </div>
             </div>
           </div>
@@ -474,7 +446,7 @@ export function AirfareIndex() {
         <section className="container-gov pb-12">
           <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
             <Card className="p-4 md:p-6">
-              <h2 className="text-lg font-semibold text-foreground">How APIx is calculated</h2>
+              <h2 className="text-lg font-semibold text-foreground">How FlyIndex India is calculated</h2>
               <ol className="mt-4 grid gap-3 sm:grid-cols-2">
                 {[
                   ['01', 'Collect', 'Airfare observations'],
