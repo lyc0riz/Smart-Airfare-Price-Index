@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowDownRight, ArrowUpRight, ArrowRight, Info, Minus, SlidersHorizontal } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import { Select } from '../components/ui/Select'
@@ -6,9 +6,12 @@ import { Table } from '../components/ui/Table'
 import { Button } from '../components/ui/Button'
 import { Link } from 'react-router-dom'
 import { formatINR, pct, cn } from '../lib/utils'
-import { AIRLINES, CITIES, ROUTES } from '../lib/constants'
+import { CITIES } from '../lib/constants'
 import { IndiaMap } from '../components/map/IndiaMap'
 import { routeIntel, formatTraffic, type RouteIntel } from '../lib/prototype/route-intel'
+import { useDataProvider } from '../hooks/useDataProvider'
+import { useMetadata } from '../hooks/useMetadata'
+import { LimitedHistoryBanner } from '../components/data/LimitedHistoryBanner'
 
 function Delta({ value, className = '' }: { value: number; className?: string }) {
   const Icon = value > 0.05 ? ArrowUpRight : value < -0.05 ? ArrowDownRight : Minus
@@ -21,12 +24,28 @@ function Delta({ value, className = '' }: { value: number; className?: string })
 }
 
 export function RouteAnalytics() {
+  const { provider } = useDataProvider()
+  const { routes, airlines } = useMetadata()
+
   const [airlineCode, setAirlineCode] = useState('ALL')
   const [selectedRoute, setSelectedRoute] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<keyof RouteIntel>('weight')
   const [sortAsc, setSortAsc] = useState(false)
 
-  const intel = useMemo(() => routeIntel(airlineCode), [airlineCode])
+  const [intel, setIntel] = useState<RouteIntel[]>(() => routeIntel('ALL'))
+  const [warning, setWarning] = useState<string | undefined>()
+
+  useEffect(() => {
+    let cancelled = false
+    provider.getRouteIntel(airlineCode).then((res) => {
+      if (cancelled) return
+      setIntel(res.data as RouteIntel[])
+      setWarning(res.warning)
+    }).catch(() => {
+      if (!cancelled) setWarning('Failed to fetch route intelligence data')
+    })
+    return () => { cancelled = true }
+  }, [provider, airlineCode])
 
   const filtered = useMemo(() => {
     return selectedRoute
@@ -46,6 +65,7 @@ export function RouteAnalytics() {
   }, [filtered, sortKey, sortAsc])
 
   const topMovement = useMemo(() => {
+    if (!intel.length) return null
     return intel.reduce((max, r) => (Math.abs(r.change) > Math.abs(max.change) ? r : max), intel[0]!)
   }, [intel])
 
@@ -93,6 +113,7 @@ export function RouteAnalytics() {
 
         {/* Filters — single bar controlling both map and table */}
         <section className="container-gov" aria-labelledby="filters-heading">
+          <LimitedHistoryBanner warning={warning} onDismiss={() => setWarning(undefined)} />
           <Card className="p-0">
             <div className="flex items-center justify-between px-4 py-3">
               <h2 id="filters-heading" className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -111,7 +132,7 @@ export function RouteAnalytics() {
                   onChange={(e) => setSelectedRoute(e.target.value === 'ALL' ? null : e.target.value)}
                 >
                   <option value="ALL">All Routes</option>
-                  {ROUTES.filter((r) => r.code !== 'ALL').map((r) => (
+                  {routes.filter((r) => r.code !== 'ALL').map((r) => (
                     <option key={r.code} value={r.code}>{r.label}</option>
                   ))}
                 </Select>
@@ -124,7 +145,7 @@ export function RouteAnalytics() {
                   value={airlineCode}
                   onChange={(e) => setAirlineCode(e.target.value)}
                 >
-                  {AIRLINES.map((a) => <option key={a.code} value={a.code}>{a.label}</option>)}
+                  {airlines.map((a) => <option key={a.code} value={a.code}>{a.label}</option>)}
                 </Select>
               </div>
               <div className="flex items-end">
@@ -167,8 +188,12 @@ export function RouteAnalytics() {
                 </div>
                 <div className="rounded-sm border border-border bg-background p-4">
                   <p className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">Top movement</p>
-                  <p className="mt-1 text-sm font-semibold text-foreground">{topMovement.route}</p>
-                  <p className="mt-0.5 text-sm text-muted-foreground"><Delta value={topMovement.change} /> at index {topMovement.index.toFixed(1)}</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">{topMovement?.route ?? '—'}</p>
+                  {topMovement ? (
+                    <p className="mt-0.5 text-sm text-muted-foreground"><Delta value={topMovement.change} /> at index {topMovement.index.toFixed(1)}</p>
+                  ) : (
+                    <p className="mt-0.5 text-xs text-muted-foreground">No data</p>
+                  )}
                 </div>
                 <div className="rounded-sm border border-border bg-background p-4">
                   <p className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">Cities covered</p>
@@ -190,7 +215,7 @@ export function RouteAnalytics() {
               <h2 id="routes-heading" className="text-lg font-semibold text-foreground">Route-wise Statistics</h2>
               <p className="text-sm text-muted-foreground">
                 {selectedRoute
-                  ? `Showing ${ROUTES.find((r) => r.code === selectedRoute)?.label ?? selectedRoute}`
+                  ? `Showing ${routes.find((r) => r.code === selectedRoute)?.label ?? selectedRoute}`
                   : 'Index levels, average fares, importance weights and contribution to the all-India index.'}
               </p>
             </div>
@@ -198,7 +223,7 @@ export function RouteAnalytics() {
 
           {selectedRoute && (
             <div className="mt-4 inline-flex items-center gap-2 rounded-sm border border-border bg-muted/50 px-3 py-1.5 text-xs text-foreground">
-              <span className="font-medium">Filtered by {ROUTES.find((r) => r.code === selectedRoute)?.label}</span>
+              <span className="font-medium">Filtered by {routes.find((r) => r.code === selectedRoute)?.label}</span>
               <button
                 type="button"
                 onClick={() => setSelectedRoute(null)}

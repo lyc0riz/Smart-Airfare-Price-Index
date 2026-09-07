@@ -76,12 +76,14 @@ async def _shared_httpx_client() -> AsyncIterator[httpx.AsyncClient]:
 
 app.dependency_overrides[get_httpx_client] = _shared_httpx_client
 
+_is_wildcard = "*" in settings.cors_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
-    allow_methods=["GET"],
-    allow_headers=["X-API-Key", "Authorization"],
+    allow_origins=settings.cors_origins if settings.cors_origins else ["*"],
+    allow_credentials=False if _is_wildcard else True,
+    allow_methods=["GET", "OPTIONS", "HEAD"],
+    allow_headers=["*"],
 )
 
 app.include_router(apix.router, prefix="/api/v1")

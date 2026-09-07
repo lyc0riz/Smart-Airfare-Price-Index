@@ -118,4 +118,58 @@ export const handlers = [
     }))
     return HttpResponse.json({ data: days, meta: meta('Ixigo', days.length) })
   }),
+
+  http.get(route('/apix/series'), ({ request }) => {
+    const url = new URL(request.url)
+    const days = Number(url.searchParams.get('days') || 60)
+    const portal = url.searchParams.get('portal') || 'Ixigo'
+    const data = Array.from({ length: Math.min(days, 60) }, (_, i) => ({
+      date: `2026-08-${String(Math.max(1, 31 - i)).padStart(2, '0')}`,
+      index_value: 105 + i * 0.2,
+    }))
+    return HttpResponse.json({
+      data,
+      meta: meta(portal, data.length),
+      available_days: data.length,
+      requested_days: days,
+    })
+  }),
+
+  http.get(route('/apix/leadtime'), ({ request }) => {
+    const url = new URL(request.url)
+    const portal = url.searchParams.get('portal') || 'Ixigo'
+    const data = [1, 7, 15, 30, 45].map((w) => ({
+      advance_windows: w,
+      avg_fare: 4500 + (45 - w) * 40,
+      p50_fare: 4400 + (45 - w) * 38,
+      min_fare: 3500,
+      max_fare: 7000,
+      observations: 120,
+    }))
+    return HttpResponse.json({ data, meta: meta(portal, data.length) })
+  }),
+
+  http.get(route('/admin/metadata'), () => {
+    return HttpResponse.json({
+      data: {
+        routes: [
+          { code: 'ALL', origin: '', destination: '', label: 'All India', weight_pct: 100 },
+          { code: 'DEL-BOM', origin: 'DEL', destination: 'BOM', label: 'DEL–BOM (Delhi–Mumbai)', weight_pct: 18.4 },
+          { code: 'DEL-BLR', origin: 'DEL', destination: 'BLR', label: 'DEL–BLR (Delhi–Bengaluru)', weight_pct: 15.7 },
+        ],
+        airlines: [
+          { code: 'ALL', label: 'All Airlines' },
+          { code: '6E', label: 'IndiGo' },
+          { code: 'AI', label: 'Air India' },
+        ],
+        portals: ['Ixigo', 'Google Flights'],
+        lead_windows: [1, 7, 15, 30, 45],
+        latest_date: '2026-08-31',
+        first_date: '2026-08-01',
+        base_period_label: 'January 2024 (monthly average)',
+        history_days: 31,
+      },
+      meta: meta('API', 1),
+    })
+  }),
 ]

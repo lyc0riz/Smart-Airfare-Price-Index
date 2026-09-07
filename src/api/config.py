@@ -29,7 +29,7 @@ class ApiSettings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 100
 
     # CORS
-    CORS_ORIGINS_JSON: str = '["http://localhost:3000"]'
+    CORS_ORIGINS_JSON: str = '["*"]'
 
     # Logging
     LOG_LEVEL: str = "INFO"

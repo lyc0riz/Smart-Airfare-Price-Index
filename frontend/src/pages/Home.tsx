@@ -1,9 +1,10 @@
+import { useEffect, useMemo, useState } from 'react'
 import { useDataProvider } from '../hooks/useDataProvider'
+import { useMetadata } from '../hooks/useMetadata'
 import { Link } from 'react-router-dom'
-import { ArrowRight, ArrowUpRight, ArrowDownRight, Minus, Plane, Map, LineChart, History, Scale, Database, BarChart3, Search, CheckCircle2, TrendingUp, CalendarClock, Gauge, Sigma } from 'lucide-react'
+import { ArrowRight, ArrowUpRight, ArrowDownRight, Minus, Plane, Map, LineChart, History, Scale, Database, BarChart3, Search, CheckCircle2, Gauge, Sigma } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import { formatDate, pct } from '../lib/utils'
-import { ROUTES, AIRLINES, LATEST_DATE, BASE_PERIOD, buildSeries, routeTable } from '../lib/prototype/apix-data'
 
 const EXPLORE_CARDS = [
   { icon: Gauge, title: 'Airfare Price Index', text: 'Track daily movements in domestic airfare prices.', href: '/airfare-index' },
@@ -58,24 +59,30 @@ function SectionHeading({ eyebrow, title, lead }: { eyebrow?: string; title: str
 }
 
 export function Home() {
-  const { mode } = useDataProvider()
-  const daily = buildSeries('ALL', 'ALL', 60)
-  const latest = daily[daily.length - 1]!.index
-  const dayAgo = daily[daily.length - 2]!.index
-  const weekAgo = daily[daily.length - 8]!.index
-  const monthAgo = daily[daily.length - 31]!.index
+  const { mode, provider } = useDataProvider()
+  const { routes, airlines, latestDate, basePeriodLabel } = useMetadata()
 
-  const summary = [
+  const [daily, setDaily] = useState<{ date: string; index: number }[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    provider.getDailySeries('ALL', 'ALL', 60).then((res) => {
+      if (cancelled) return
+      setDaily(res.data.map((p) => ({ date: p.date, index: p.index_value })))
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [provider])
+
+  const latest = daily[daily.length - 1]?.index ?? 108.42
+  const dayAgo = daily[daily.length - 2]?.index ?? latest
+  const weekAgo = daily[daily.length - 8]?.index ?? latest
+  const monthAgo = daily[daily.length - 31]?.index ?? latest
+
+  const summary = useMemo(() => [
     { label: 'Daily Change', value: ((latest - dayAgo) / dayAgo) * 100 },
     { label: '7-Day Change', value: ((latest - weekAgo) / weekAgo) * 100 },
     { label: '30-Day Change', value: ((latest - monthAgo) / monthAgo) * 100 },
-  ]
-
-  const rows = routeTable('ALL')
-  const movement = [...rows].sort((a, b) => b.change - a.change)
-  const top = movement[0]!
-  const bottom = movement[movement.length - 1]!
-  const totalObservations = rows.reduce((sum, row) => sum + row.observations, 0)
+  ], [latest, dayAgo, weekAgo, monthAgo])
 
   return (
     <div className="min-h-screen bg-background">
@@ -140,7 +147,7 @@ export function Home() {
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Current APIx</p>
                     <p className="mt-1 font-serif text-4xl font-bold tabular-nums text-foreground">{latest.toFixed(2)}</p>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      Base period: {BASE_PERIOD}
+                      Base period: {basePeriodLabel}
                     </p>
                   </div>
                   <div className="rounded-sm border border-border bg-muted/50 px-3 py-2 text-xs">
@@ -159,8 +166,8 @@ export function Home() {
 
                 <dl className="mt-4 space-y-3">
                   {[
-                    ['Coverage', `${ROUTES.length - 1} routes · ${AIRLINES.length - 1} airlines`],
-                    ['Latest observation', formatDate(LATEST_DATE)],
+                    ['Coverage', `${routes.length - 1} routes · ${airlines.length - 1} airlines`],
+                    ['Latest observation', formatDate(latestDate)],
                     ['Weighting basis', 'DGCA passenger traffic'],
                   ].map(([term, value]) => (
                     <div key={term} className="flex items-baseline justify-between gap-4">
@@ -218,162 +225,101 @@ export function Home() {
         <section className="border-b border-border bg-muted/50">
           <div className="container-gov py-14 md:py-16">
             <SectionHeading
-              eyebrow="Sections"
-              title="Explore APIx"
-              lead="Each section of the platform presents a distinct view of airfare statistics."
+              eyebrow="Explore Platform"
+              title="Interactive Analytical Views"
+              lead="Access detailed index series, route comparisons, lead-time elasticity and data records."
             />
-            <div className="mt-9 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {EXPLORE_CARDS.map(({ icon: Icon, title, text, href }) => (
-                <Link
-                  key={title}
-                  to={href}
-                  className="group flex flex-col rounded-sm border border-border bg-card p-5 transition-shadow hover:shadow-lg"
-                >
-                  <span className="flex h-10 w-10 items-center justify-center rounded-sm border border-border bg-muted text-primary" aria-hidden="true">
-                    <Icon className="h-5 w-5" strokeWidth={1.6} />
-                  </span>
-                  <h3 className="mt-4 text-base font-semibold text-foreground">{title}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{text}</p>
-                  <span className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-primary">
-                    Explore
-                    <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
-                  </span>
-                </Link>
-              ))}
+            <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {EXPLORE_CARDS.map((card) => {
+                const Icon = card.icon
+                return (
+                  <Link
+                    key={card.title}
+                    to={card.href}
+                    className="group flex flex-col justify-between rounded-sm border border-border bg-card p-6 shadow-sm transition-all hover:border-primary hover:shadow-md"
+                  >
+                    <div>
+                      <div className="flex h-10 w-10 items-center justify-center rounded-sm bg-muted text-foreground transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
+                        <Icon className="h-5 w-5" aria-hidden="true" />
+                      </div>
+                      <h3 className="mt-4 text-lg font-semibold text-foreground group-hover:text-primary">
+                        {card.title}
+                      </h3>
+                      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{card.text}</p>
+                    </div>
+                    <span className="mt-4 inline-flex items-center gap-1 text-xs font-semibold text-primary">
+                      View details
+                      <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" aria-hidden="true" />
+                    </span>
+                  </Link>
+                )
+              })}
             </div>
           </div>
         </section>
 
-        {/* Data sources */}
+        {/* Methodology */}
         <section className="border-b border-border">
-          <div className="container-gov py-14 md:py-16">
-            <SectionHeading
-              eyebrow="Inputs"
-              title="Data & Statistical Sources"
-              lead="APIx draws on official statistics and observed market data. Source data and APIx analytical outputs are reported separately."
-            />
-            <div className="mt-9 grid gap-4 md:grid-cols-3">
-              {SOURCES.map((source) => (
-                <div key={source.name} className="rounded-sm border border-border bg-card p-5">
-                  <span className="inline-block rounded-sm border border-border bg-muted px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-primary">
-                    {source.tag}
-                  </span>
-                  <h3 className="mt-3 text-lg font-semibold text-foreground">{source.name}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{source.text}</p>
-                </div>
-              ))}
-            </div>
-            <div className="mt-6 flex flex-col gap-4 rounded-sm border-l-2 border-primary border-y border-r border-border bg-muted/50 p-5 md:flex-row md:items-center md:justify-between">
-              <p className="max-w-2xl text-sm leading-relaxed text-foreground">
-                <strong className="font-semibold">Note:</strong> indices, weights and comparisons
-                published here are analytical results generated by APIx. They do not replace or
-                amend official statistics released by DGCA or MoSPI.
-              </p>
-              <Link
-                to="/data-sources"
-                className="inline-flex shrink-0 items-center gap-2 rounded-sm border border-primary bg-background px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-accent"
-              >
-                View Data Sources
-                <ArrowRight className="h-4 w-4" aria-hidden="true" />
-              </Link>
-            </div>
-          </div>
-        </section>
-
-        {/* Platform features */}
-        <section className="border-b border-border bg-muted/50">
-          <div className="container-gov py-14 md:py-16">
-            <SectionHeading eyebrow="Capabilities" title="Platform Features" />
-            <div className="mt-9 grid gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-3">
-              {FEATURES.map(({ icon: Icon, title, text }) => (
-                <div key={title} className="flex items-start gap-3 border-t border-border pt-5">
-                  <Icon className="mt-0.5 h-5 w-5 shrink-0 text-primary" strokeWidth={1.6} aria-hidden="true" />
-                  <div>
-                    <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{text}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* Latest insights */}
-        <section className="border-b border-border">
-          <div className="container-gov py-14 md:py-16">
-            <SectionHeading
-              eyebrow="Key highlights"
-              title="Latest Insights"
-              lead="A short preview of current observations. Detailed statistics are available in the respective sections."
-            />
-            <div className="mt-9 grid gap-4 md:grid-cols-3">
-              <article className="rounded-sm border border-border bg-card p-5">
-                <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                  <TrendingUp className="h-3.5 w-3.5" aria-hidden="true" />
-                  Index movement
-                </p>
-                <h3 className="mt-3 text-base font-semibold text-foreground">Route with the largest rise</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                  {top.route} recorded the highest week-on-week increase of{' '}
-                  <span className="font-semibold text-foreground">{pct(top.change)}</span> at an index of {top.index.toFixed(1)}.
-                </p>
-              </article>
-              <article className="rounded-sm border border-border bg-card p-5">
-                <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                  <TrendingUp className="h-3.5 w-3.5" aria-hidden="true" />
-                  Route watch
-                </p>
-                <h3 className="mt-3 text-base font-semibold text-foreground">Route with the largest fall</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                  {bottom.route} recorded the largest decline of{' '}
-                  <span className="font-semibold text-foreground">{pct(bottom.change)}</span> at an index of {bottom.index.toFixed(1)}.
-                </p>
-              </article>
-              <article className="rounded-sm border border-border bg-card p-5">
-                <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                  <CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />
-                  Data status
-                </p>
-                <h3 className="mt-3 text-base font-semibold text-foreground">Latest data update</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                  {formatDate(LATEST_DATE)} · {totalObservations.toLocaleString('en-IN')} observations from{' '}
-                  {ROUTES.length - 1} routes and {AIRLINES.length - 1} carriers.
-                </p>
-              </article>
-            </div>
-            <p className="mt-5 flex items-center gap-2 text-xs text-muted-foreground">
-              <CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />
-              Insight cards are refreshed with each validated observation batch.
-            </p>
-          </div>
-        </section>
-
-        {/* Methodology preview */}
-        <section className="border-b border-border bg-muted/50">
           <div className="container-gov py-14 md:py-16">
             <SectionHeading
               eyebrow="Methodology"
-              title="How APIx Works"
-              lead="A brief introduction to the index construction process. The full statistical explanation is available on the methodology page."
+              title="How the Index is Computed"
+              lead="APIx uses a structured four-stage statistical process to convert observed airfares into a reliable price index."
             />
-            <ol className="mt-9 grid gap-4 md:grid-cols-4">
+            <div className="mt-8 grid gap-px overflow-hidden rounded-sm border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
               {STEPS.map((step) => (
-                <li key={step.n} className="rounded-sm border border-border bg-card p-5">
+                <div key={step.n} className="bg-background p-6">
                   <span className="flex h-8 w-8 items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground">
                     {step.n}
                   </span>
                   <h3 className="mt-4 text-base font-semibold text-foreground">{step.title}</h3>
-                  <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{step.text}</p>
-                </li>
+                  <p className="mt-1 text-sm text-muted-foreground">{step.text}</p>
+                </div>
               ))}
-            </ol>
-            <Link
-              to="/data-sources"
-              className="mt-7 inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline"
-            >
-              View Methodology
-              <ArrowRight className="h-4 w-4" aria-hidden="true" />
-            </Link>
+            </div>
+          </div>
+        </section>
+
+        {/* Features */}
+        <section className="border-b border-border bg-muted/50">
+          <div className="container-gov py-14 md:py-16">
+            <SectionHeading
+              eyebrow="Key Features"
+              title="Platform Capabilities"
+              lead="Designed for researchers, analysts and policy institutions requiring accurate airfare tracking."
+            />
+            <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {FEATURES.map((feature) => {
+                const Icon = feature.icon
+                return (
+                  <div key={feature.title} className="rounded-sm border border-border bg-card p-6 shadow-sm">
+                    <Icon className="h-6 w-6 text-primary" aria-hidden="true" />
+                    <h3 className="mt-3 text-base font-semibold text-foreground">{feature.title}</h3>
+                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{feature.text}</p>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </section>
+
+        {/* Data Sources */}
+        <section className="border-b border-border">
+          <div className="container-gov py-14 md:py-16">
+            <SectionHeading
+              eyebrow="Sources"
+              title="Data Sources & Integrity"
+              lead="APIx incorporates multiple information sources to ensure accurate route weighting and price tracking."
+            />
+            <div className="mt-8 grid gap-6 md:grid-cols-3">
+              {SOURCES.map((source) => (
+                <div key={source.name} className="rounded-sm border border-border bg-card p-6 shadow-sm">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{source.tag}</span>
+                  <h3 className="mt-2 text-lg font-semibold text-foreground">{source.name}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{source.text}</p>
+                </div>
+              ))}
+            </div>
           </div>
         </section>
       </main>

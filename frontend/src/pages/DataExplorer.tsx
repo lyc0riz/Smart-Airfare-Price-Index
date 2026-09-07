@@ -5,14 +5,16 @@ import { Select } from '../components/ui/Select'
 import { Table } from '../components/ui/Table'
 import { Button } from '../components/ui/Button'
 import { useDataProvider } from '../hooks/useDataProvider'
+import { useMetadata } from '../hooks/useMetadata'
 import { formatINR, formatDate, pct } from '../lib/utils'
-import { ROUTES, AIRLINES, LATEST_DATE, routeTable, type RouteRow } from '../lib/prototype/apix-data'
-import type { ByRouteRow } from '../lib/types'
+import type { RouteRow, ByRouteRow } from '../lib/types'
 
 const PAGE_SIZE = 8
 
 export function DataExplorer() {
   const { provider } = useDataProvider()
+  const { routes, airlines, latestDate } = useMetadata()
+
   const [airlineCode, setAirlineCode] = useState('ALL')
   const [portal, setPortal] = useState('Ixigo')
   const [query, setQuery] = useState('')
@@ -20,19 +22,26 @@ export function DataExplorer() {
   const [sortAsc, setSortAsc] = useState(false)
   const [page, setPage] = useState(0)
 
+  const [rows, setRows] = useState<RouteRow[]>([])
   const [liveRows, setLiveRows] = useState<ByRouteRow[] | null>(null)
   const [liveError, setLiveError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    provider.getByRoute(LATEST_DATE, portal).then(
+    provider.getRouteTable(airlineCode).then((res) => {
+      if (!cancelled) setRows(res.data as RouteRow[])
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [provider, airlineCode])
+
+  useEffect(() => {
+    let cancelled = false
+    provider.getByRoute(latestDate, portal).then(
       (res) => { if (!cancelled) { setLiveRows(res.data); setLiveError(null) } },
       (err: unknown) => { if (!cancelled) { setLiveRows(null); setLiveError(err instanceof Error ? err.message : 'Failed to load route data') } }
     )
     return () => { cancelled = true }
-  }, [provider, portal])
-
-  const rows = useMemo(() => routeTable(airlineCode), [airlineCode])
+  }, [provider, portal, latestDate])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -43,7 +52,7 @@ export function DataExplorer() {
       if (typeof av === 'string' || typeof bv === 'string') {
         return sortAsc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av))
       }
-      return sortAsc ? av - bv : bv - av
+      return sortAsc ? (av as number) - (bv as number) : (bv as number) - (av as number)
     })
   }, [rows, query, sortKey, sortAsc])
 
@@ -75,10 +84,10 @@ export function DataExplorer() {
             </p>
             <dl className="mt-6 grid gap-px overflow-hidden rounded-sm border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
               {[
-                ['Routes tracked', String(ROUTES.length - 1)],
-                ['Latest observation date', formatDate(LATEST_DATE)],
+                ['Routes tracked', String(routes.length - 1)],
+                ['Latest observation date', formatDate(latestDate)],
                 ['Total observations', totalObservations.toLocaleString('en-IN')],
-                ['Carriers covered', String(AIRLINES.length - 1)],
+                ['Carriers covered', String(airlines.length - 1)],
               ].map(([term, value]) => (
                 <div key={term} className="bg-background px-4 py-3">
                   <dt className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{term}</dt>
@@ -115,7 +124,7 @@ export function DataExplorer() {
                 <div>
                   <label htmlFor="exp-airline" className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-muted-foreground">Airline</label>
                   <Select id="exp-airline" className="h-9 w-44 rounded-sm border border-border bg-background px-3 text-sm text-foreground" value={airlineCode} onChange={(e) => setAirlineCode(e.target.value)}>
-                    {AIRLINES.map((a) => <option key={a.code} value={a.code}>{a.label}</option>)}
+                    {airlines.map((a) => <option key={a.code} value={a.code}>{a.label}</option>)}
                   </Select>
                 </div>
                 <Button variant="outline" size="sm"><Download className="mr-2 h-4 w-4" aria-hidden="true" /> CSV</Button>

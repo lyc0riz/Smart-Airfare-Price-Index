@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { LineChart as RechartsLineChart, Line, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ArrowDownRight, ArrowRight, ArrowUpRight, Download, Info, Minus, Search, SlidersHorizontal } from 'lucide-react'
 import { Card } from '../components/ui/Card'
@@ -7,7 +7,11 @@ import { Table } from '../components/ui/Table'
 import { Button } from '../components/ui/Button'
 import { Link } from 'react-router-dom'
 import { formatDate, formatINR, pct, cn } from '../lib/utils'
-import { ROUTES, AIRLINES, RANGE_OPTIONS, BASE_PERIOD, LATEST_DATE, buildSeries, aggregate, routeTable, type RouteRow } from '../lib/prototype/apix-data'
+import { RANGE_OPTIONS, buildSeries, routeTable, type RouteRow } from '../lib/prototype/apix-data'
+import { aggregate } from '../lib/computations'
+import { useDataProvider } from '../hooks/useDataProvider'
+import { useMetadata } from '../hooks/useMetadata'
+import { LimitedHistoryBanner } from '../components/data/LimitedHistoryBanner'
 import type { RangeKey } from '../lib/constants'
 
 const FREQUENCIES = ['daily', 'weekly', 'monthly'] as const
@@ -48,6 +52,9 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: { paylo
 }
 
 export function AirfareIndex() {
+  const { provider } = useDataProvider()
+  const { routes, airlines, latestDate, basePeriodLabel, historyDays } = useMetadata()
+
   const [range, setRange] = useState<RangeKey>('30d')
   const [routeCode, setRouteCode] = useState('ALL')
   const [airlineCode, setAirlineCode] = useState('ALL')
@@ -59,9 +66,40 @@ export function AirfareIndex() {
   const [sortAsc, setSortAsc] = useState(false)
   const [page, setPage] = useState(0)
 
+  const [daily, setDaily] = useState<{ date: string; index: number }[]>(() =>
+    buildSeries('ALL', 'ALL', 60).map((p) => ({ date: p.date, index: p.index }))
+  )
+  const [routeRows, setRouteRows] = useState<RouteRow[]>(() => routeTable('ALL'))
+  const [warning, setWarning] = useState<string | undefined>()
+
   const days = RANGE_OPTIONS.find((option) => option.key === range)!.days
 
-  const daily = useMemo(() => buildSeries(routeCode, airlineCode, Math.max(days, 60)), [routeCode, airlineCode, days])
+  // Fetch daily series & route table from the active provider
+  useEffect(() => {
+    let cancelled = false
+    provider.getDailySeries(routeCode, airlineCode, Math.max(days, 60)).then((res) => {
+      if (cancelled) return
+      setDaily(res.data.map((p) => ({ date: p.date, index: p.index_value })))
+      setWarning(res.warning)
+    }).catch(() => {
+      if (!cancelled) setWarning('Failed to fetch live series data')
+    })
+    return () => { cancelled = true }
+  }, [provider, routeCode, airlineCode, days])
+
+  useEffect(() => {
+    let cancelled = false
+    provider.getRouteTable(airlineCode).then((res) => {
+      if (cancelled) return
+      setRouteRows(res.data as RouteRow[])
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [provider, airlineCode])
+
+  // Dynamically cap range options based on available live data depth
+  const availableRanges = useMemo(() => {
+    return RANGE_OPTIONS.filter((opt) => opt.days <= Math.max(historyDays, 30))
+  }, [historyDays])
 
   const chartData = useMemo(() => {
     const windowed = daily.slice(-days)
@@ -73,10 +111,10 @@ export function AirfareIndex() {
     }))
   }, [daily, days, frequency])
 
-  const latest = daily[daily.length - 1]!.index
-  const dayAgo = daily[daily.length - 2]!.index
-  const weekAgo = daily[daily.length - 8]!.index
-  const monthAgo = daily[daily.length - 31]!.index
+  const latest = daily[daily.length - 1]?.index ?? 100
+  const dayAgo = daily[daily.length - 2]?.index ?? latest
+  const weekAgo = daily[daily.length - 8]?.index ?? latest
+  const monthAgo = daily[daily.length - 31]?.index ?? latest
 
   const summary = [
     { label: 'Daily Change', value: ((latest - dayAgo) / dayAgo) * 100, delta: true },
@@ -85,11 +123,10 @@ export function AirfareIndex() {
   ]
 
   const rows = useMemo(() => {
-    const table = routeTable(airlineCode)
     return routeCode !== 'ALL'
-      ? table.filter((row) => row.route === routeCode.replace('-', '–'))
-      : table
-  }, [airlineCode, routeCode])
+      ? routeRows.filter((row) => row.route === routeCode.replace('-', '–'))
+      : routeRows
+  }, [routeRows, routeCode])
 
   const filteredRows = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -109,9 +146,10 @@ export function AirfareIndex() {
   const pagedRows = filteredRows.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE)
 
   const movement = useMemo(() => {
+    if (!rows.length) return null
     const byChange = [...rows].sort((a, b) => b.change - a.change)
-    const stable = [...rows].sort((a, b) => Math.abs(a.change) - Math.abs(b.change))[0]!
-    return { top: byChange[0]!, bottom: byChange[byChange.length - 1]!, stable }
+    const stable = [...rows].sort((a, b) => Math.abs(a.change) - Math.abs(b.change))[0]
+    return { top: byChange[0], bottom: byChange[byChange.length - 1], stable }
   }, [rows])
 
   function toggleSort(key: string, direction: 'asc' | 'desc') {
@@ -160,11 +198,11 @@ export function AirfareIndex() {
 
             <dl className="mt-6 grid gap-px overflow-hidden rounded-sm border border-border bg-border sm:grid-cols-2 lg:grid-cols-5">
               {[
-                { term: 'Base period', value: BASE_PERIOD },
+                { term: 'Base period', value: basePeriodLabel },
                 { term: 'Base index', value: '100' },
-                { term: 'Latest observation', value: formatDate(LATEST_DATE) },
-                { term: 'Data coverage', value: `${ROUTES.length - 1} routes · ${AIRLINES.length - 1} airlines` },
-                { term: 'Last updated', value: `${formatDate(LATEST_DATE)}, 06:00 IST` },
+                { term: 'Latest observation', value: formatDate(latestDate) },
+                { term: 'Data coverage', value: `${routes.length - 1} routes · ${airlines.length - 1} airlines` },
+                { term: 'Last updated', value: `${formatDate(latestDate)}, 06:00 IST` },
               ].map((item) => (
                 <div key={item.term} className="bg-background px-4 py-3">
                   <dt className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{item.term}</dt>
@@ -208,6 +246,7 @@ export function AirfareIndex() {
 
         {/* Filters */}
         <section className="container-gov" aria-labelledby="filters-heading">
+          <LimitedHistoryBanner warning={warning} onDismiss={() => setWarning(undefined)} />
           <Card className="p-0">
             <div className="flex items-center justify-between px-4 py-3">
               <h2 id="filters-heading" className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -226,7 +265,7 @@ export function AirfareIndex() {
               <div>
                 <label className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-muted-foreground" htmlFor="filter-period">Time Period</label>
                 <div id="filter-period" className="flex flex-wrap gap-1" role="group">
-                  {RANGE_OPTIONS.map((option) => (
+                  {availableRanges.map((option) => (
                     <button
                       key={option.key}
                       type="button"
@@ -248,7 +287,7 @@ export function AirfareIndex() {
               <div>
                 <label className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-muted-foreground" htmlFor="filter-route">Route</label>
                 <Select id="filter-route" className={selectClass} value={routeCode} onChange={(e) => setRouteCode(e.target.value)}>
-                  {ROUTES.map((route) => (
+                  {routes.map((route) => (
                     <option key={route.code} value={route.code}>{route.label}</option>
                   ))}
                 </Select>
@@ -257,7 +296,7 @@ export function AirfareIndex() {
               <div>
                 <label className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-muted-foreground" htmlFor="filter-airline">Airline</label>
                 <Select id="filter-airline" className={selectClass} value={airlineCode} onChange={(e) => setAirlineCode(e.target.value)}>
-                  {AIRLINES.map((airline) => (
+                  {airlines.map((airline) => (
                     <option key={airline.code} value={airline.code}>{airline.label}</option>
                   ))}
                 </Select>
@@ -281,8 +320,8 @@ export function AirfareIndex() {
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <h2 id="chart-heading" className="text-lg font-semibold text-foreground">Airfare Price Index Trend</h2>
               <p className="text-xs text-muted-foreground">
-                {ROUTES.find((r) => r.code === routeCode)?.label} ·{' '}
-                {AIRLINES.find((a) => a.code === airlineCode)?.label} ·{' '}
+                {routes.find((r) => r.code === routeCode)?.label} ·{' '}
+                {airlines.find((a) => a.code === airlineCode)?.label} ·{' '}
                 {frequency.charAt(0).toUpperCase() + frequency.slice(1)}
               </p>
             </div>
@@ -393,7 +432,7 @@ export function AirfareIndex() {
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             {routeCode !== 'ALL' ? (
               <div className="inline-flex items-center gap-2 rounded-sm border border-border bg-muted/50 px-3 py-1.5 text-xs text-foreground">
-                <span className="font-medium">Filtered by {ROUTES.find((r) => r.code === routeCode)?.label}</span>
+                <span className="font-medium">Filtered by {routes.find((r) => r.code === routeCode)?.label}</span>
                 <button
                   type="button"
                   onClick={() => setRouteCode('ALL')}
@@ -419,22 +458,24 @@ export function AirfareIndex() {
         </section>
 
         {/* Recent price movement */}
-        <section className="container-gov pb-8" aria-labelledby="movement-heading">
-          <h2 id="movement-heading" className="text-lg font-semibold text-foreground">Recent Airfare Movement</h2>
-          <div className="mt-4 grid gap-px overflow-hidden rounded-sm border border-border bg-border md:grid-cols-3">
-            {[
-              { label: 'Highest Increase', row: movement.top },
-              { label: 'Highest Decrease', row: movement.bottom },
-              { label: 'Most Stable Route', row: movement.stable },
-            ].map((item) => (
-              <div key={item.label} className="bg-background px-4 py-4">
-                <p className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{item.label}</p>
-                <p className="mt-1 text-base font-semibold text-foreground">{item.row.route}</p>
-                <p className="mt-1 text-sm text-muted-foreground"><Delta value={item.row.change} /> · Index {item.row.index.toFixed(1)}</p>
-              </div>
-            ))}
-          </div>
-        </section>
+        {movement && movement.top && (
+          <section className="container-gov pb-8" aria-labelledby="movement-heading">
+            <h2 id="movement-heading" className="text-lg font-semibold text-foreground">Recent Airfare Movement</h2>
+            <div className="mt-4 grid gap-px overflow-hidden rounded-sm border border-border bg-border md:grid-cols-3">
+              {[
+                { label: 'Highest Increase', row: movement.top },
+                { label: 'Highest Decrease', row: movement.bottom },
+                { label: 'Most Stable Route', row: movement.stable },
+              ].filter((item): item is { label: string; row: RouteRow } => Boolean(item.row)).map((item) => (
+                <div key={item.label} className="bg-background px-4 py-4">
+                  <p className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{item.label}</p>
+                  <p className="mt-1 text-base font-semibold text-foreground">{item.row.route}</p>
+                  <p className="mt-1 text-sm text-muted-foreground"><Delta value={item.row.change} /> · Index {item.row.index.toFixed(1)}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Data coverage */}
         <section className="container-gov pb-8" aria-labelledby="coverage-heading">
@@ -446,8 +487,8 @@ export function AirfareIndex() {
                   ['Observation period', '1 January 2024 – 29 August 2026'],
                   ['Number of observations', totalObservations.toLocaleString('en-IN')],
                   ['Number of routes', String(rows.length)],
-                  ['Number of airlines', String(AIRLINES.length - 1)],
-                  ['Latest update', `${formatDate(LATEST_DATE)}, 06:00 IST`],
+                  ['Number of airlines', String(airlines.length - 1)],
+                  ['Latest update', `${formatDate(latestDate)}, 06:00 IST`],
                   ['Data source', 'Airline booking portals, DGCA traffic statistics'],
                 ].map(([term, value]) => (
                   <div key={term} className="flex flex-wrap justify-between gap-2 py-2 text-sm">

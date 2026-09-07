@@ -1,12 +1,16 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { LineChart as RechartsLineChart, Line, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Info } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import { Select } from '../components/ui/Select'
 import { formatDate } from '../lib/utils'
-import { ROUTES, AIRLINES, RANGE_OPTIONS, buildSeries, aggregate } from '../lib/prototype/apix-data'
+import { RANGE_OPTIONS } from '../lib/constants'
+import { aggregate } from '../lib/computations'
 import type { RangeKey } from '../lib/constants'
 import { cn } from '../lib/utils'
+import { useDataProvider } from '../hooks/useDataProvider'
+import { useMetadata } from '../hooks/useMetadata'
+import { LimitedHistoryBanner } from '../components/data/LimitedHistoryBanner'
 
 interface TooltipPoint {
   date: string
@@ -33,28 +37,56 @@ function ChartTooltip({ active, payload, yKeys }: { active?: boolean; payload?: 
 }
 
 export function PriceTrends() {
+  const { provider } = useDataProvider()
+  const { routes, airlines, historyDays } = useMetadata()
+
   const [range, setRange] = useState<RangeKey>('3m')
   const [routeCode, setRouteCode] = useState('ALL')
   const [airlineCode, setAirlineCode] = useState('ALL')
   const [frequency, setFrequency] = useState<'daily' | 'weekly' | 'monthly'>('weekly')
 
+  const [allIndiaRaw, setAllIndiaRaw] = useState<{ date: string; index: number }[]>([])
+  const [routeSeriesRaw, setRouteSeriesRaw] = useState<{ date: string; index: number }[]>([])
+  const [warning, setWarning] = useState<string | undefined>()
+
   const days = RANGE_OPTIONS.find((o) => o.key === range)!.days
-  const allIndia = useMemo(() => buildSeries('ALL', airlineCode, Math.max(days, 60)), [airlineCode, days])
-  const routeSeries = useMemo(() => buildSeries(routeCode === 'ALL' ? 'DEL-BOM' : routeCode, airlineCode, Math.max(days, 60)), [routeCode, airlineCode, days])
+
+  const availableRanges = useMemo(() => {
+    return RANGE_OPTIONS.filter((opt) => opt.days <= Math.max(historyDays, 30))
+  }, [historyDays])
+
+  useEffect(() => {
+    let cancelled = false
+    const targetRoute = routeCode === 'ALL' ? 'DEL-BOM' : routeCode
+    Promise.all([
+      provider.getDailySeries('ALL', airlineCode, Math.max(days, 60)),
+      provider.getDailySeries(targetRoute, airlineCode, Math.max(days, 60)),
+    ]).then(([resAll, resRoute]) => {
+      if (cancelled) return
+      setAllIndiaRaw(resAll.data.map((p) => ({ date: p.date, index: p.index_value })))
+      setRouteSeriesRaw(resRoute.data.map((p) => ({ date: p.date, index: p.index_value })))
+      setWarning(resAll.warning || resRoute.warning)
+    }).catch(() => {
+      if (!cancelled) setWarning('Failed to fetch price trend series')
+    })
+    return () => { cancelled = true }
+  }, [provider, routeCode, airlineCode, days])
 
   const mainData = useMemo(() => {
-    const series = aggregate(allIndia, frequency)
+    if (!allIndiaRaw.length) return []
+    const series = aggregate(allIndiaRaw, frequency)
     const start = series[series.length - Math.min(days, series.length)]
     const base = start?.index ?? 100
     return series.map((p) => ({ date: p.date, index: p.index, rebased: (p.index / base) * 100 }))
-  }, [allIndia, frequency, days])
+  }, [allIndiaRaw, frequency, days])
 
   const compareData = useMemo(() => {
-    const a = aggregate(allIndia, 'weekly')
-    const b = aggregate(routeSeries, 'weekly')
+    if (!allIndiaRaw.length || !routeSeriesRaw.length) return []
+    const a = aggregate(allIndiaRaw, 'weekly')
+    const b = aggregate(routeSeriesRaw, 'weekly')
     const map = new Map(a.map((p) => [p.date, p.index]))
     return b.map((p) => ({ date: p.date, allIndia: map.get(p.date) ?? p.index, route: p.index }))
-  }, [allIndia, routeSeries])
+  }, [allIndiaRaw, routeSeriesRaw])
 
   const yKeys = [
     { key: 'index', label: 'APIx' },
@@ -79,12 +111,13 @@ export function PriceTrends() {
         </section>
 
         <section className="container-gov py-8">
+          <LimitedHistoryBanner warning={warning} onDismiss={() => setWarning(undefined)} />
           <Card className="p-4 md:p-6">
             <div className="flex flex-wrap items-center gap-4">
               <div>
                 <label className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-muted-foreground">Time Period</label>
                 <div className="flex flex-wrap gap-1" role="group" aria-label="Time period">
-                  {RANGE_OPTIONS.map((option) => (
+                  {availableRanges.map((option) => (
                     <button
                       key={option.key}
                       type="button"
@@ -105,13 +138,13 @@ export function PriceTrends() {
               <div>
                 <label htmlFor="trends-route" className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-muted-foreground">Route</label>
                 <Select id="trends-route" className="h-9 w-56 rounded-sm border border-border bg-background px-3 text-sm text-foreground" value={routeCode} onChange={(e) => setRouteCode(e.target.value)}>
-                  {ROUTES.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+                  {routes.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
                 </Select>
               </div>
               <div>
                 <label htmlFor="trends-airline" className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-muted-foreground">Airline</label>
                 <Select id="trends-airline" className="h-9 w-48 rounded-sm border border-border bg-background px-3 text-sm text-foreground" value={airlineCode} onChange={(e) => setAirlineCode(e.target.value)}>
-                  {AIRLINES.map((a) => <option key={a.code} value={a.code}>{a.label}</option>)}
+                  {airlines.map((a) => <option key={a.code} value={a.code}>{a.label}</option>)}
                 </Select>
               </div>
               <div>
@@ -161,7 +194,7 @@ export function PriceTrends() {
           <Card className="p-4 md:p-6">
             <div className="flex items-baseline justify-between gap-2">
               <h2 className="text-lg font-semibold text-foreground">Route vs All-India Comparison</h2>
-              <p className="text-xs text-muted-foreground">Weekly · {ROUTES.find((r) => r.code === routeCode)?.label ?? 'All India'}</p>
+              <p className="text-xs text-muted-foreground">Weekly · {routes.find((r) => r.code === routeCode)?.label ?? 'All India'}</p>
             </div>
             <div className="mt-4 h-[300px] w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -181,8 +214,8 @@ export function PriceTrends() {
         <section className="container-gov pb-10">
           <div className="grid gap-px overflow-hidden rounded-sm border border-border bg-border md:grid-cols-3">
             {[
-              { label: 'Selected route', value: ROUTES.find((r) => r.code === routeCode)?.label ?? 'All India' },
-              { label: 'Selected airline', value: AIRLINES.find((a) => a.code === airlineCode)?.label ?? 'All Airlines' },
+              { label: 'Selected route', value: routes.find((r) => r.code === routeCode)?.label ?? 'All India' },
+              { label: 'Selected airline', value: airlines.find((a) => a.code === airlineCode)?.label ?? 'All Airlines' },
               { label: 'Observation window', value: `${days} days` },
             ].map((item) => (
               <div key={item.label} className="bg-background px-4 py-4">

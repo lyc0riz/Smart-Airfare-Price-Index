@@ -1,21 +1,41 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { LineChart as RechartsLineChart, Line, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend } from 'recharts'
 import { Info } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import { Select } from '../components/ui/Select'
 import { Table } from '../components/ui/Table'
 import { formatINR, pct } from '../lib/utils'
-import { ROUTES, AIRLINES } from '../lib/prototype/apix-data'
-import { windowStats, airlineLeadTime, leadCurve, LEAD_WINDOWS, TRAVEL_DATE_AVAILABLE, OBSERVATION_PERIOD, type WindowStat } from '../lib/prototype/leadtime'
+import { LEAD_WINDOWS, TRAVEL_DATE_AVAILABLE, OBSERVATION_PERIOD, type WindowStat } from '../lib/prototype/leadtime'
 import { cn } from '../lib/utils'
+import { useDataProvider } from '../hooks/useDataProvider'
+import { useMetadata } from '../hooks/useMetadata'
+import { LimitedHistoryBanner } from '../components/data/LimitedHistoryBanner'
 
 export function LeadTimeAnalysis() {
+  const { provider } = useDataProvider()
+  const { routes, airlines } = useMetadata()
+
   const [routeCode, setRouteCode] = useState('ALL')
   const [airlineCode, setAirlineCode] = useState('ALL')
 
-  const curve = useMemo(() => leadCurve(routeCode, airlineCode), [routeCode, airlineCode])
-  const stats = useMemo(() => windowStats(routeCode, airlineCode), [routeCode, airlineCode])
-  const airlines = useMemo(() => airlineLeadTime(routeCode), [routeCode])
+  const [curve, setCurve] = useState<{ days: number; avgFare: number }[]>([])
+  const [stats, setStats] = useState<WindowStat[]>([])
+  const [airlineFares, setAirlineFares] = useState<{ code: string; label: string; fares: number[]; spread: number }[]>([])
+  const [warning, setWarning] = useState<string | undefined>()
+
+  useEffect(() => {
+    let cancelled = false
+    provider.getLeadTimeData(routeCode, airlineCode).then((res) => {
+      if (cancelled) return
+      setCurve(res.data.curve)
+      setStats(res.data.stats as WindowStat[])
+      setAirlineFares(res.data.airlines)
+      setWarning(res.warning)
+    }).catch(() => {
+      if (!cancelled) setWarning('Failed to fetch lead-time analysis data')
+    })
+    return () => { cancelled = true }
+  }, [provider, routeCode, airlineCode])
 
   const maxWindow = Math.max(...LEAD_WINDOWS)
 
@@ -50,6 +70,7 @@ export function LeadTimeAnalysis() {
         </section>
 
         <section className="container-gov py-8">
+          <LimitedHistoryBanner warning={warning} onDismiss={() => setWarning(undefined)} />
           <Card className="p-4 md:p-6">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
@@ -60,13 +81,13 @@ export function LeadTimeAnalysis() {
                 <div>
                   <label htmlFor="lead-route" className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-muted-foreground">Route</label>
                   <Select id="lead-route" className="h-9 w-52 rounded-sm border border-border bg-background px-3 text-sm text-foreground" value={routeCode} onChange={(e) => setRouteCode(e.target.value)}>
-                    {ROUTES.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+                    {routes.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
                   </Select>
                 </div>
                 <div>
                   <label htmlFor="lead-airline" className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-muted-foreground">Airline</label>
                   <Select id="lead-airline" className="h-9 w-48 rounded-sm border border-border bg-background px-3 text-sm text-foreground" value={airlineCode} onChange={(e) => setAirlineCode(e.target.value)}>
-                    {AIRLINES.map((a) => <option key={a.code} value={a.code}>{a.label}</option>)}
+                    {airlines.map((a) => <option key={a.code} value={a.code}>{a.label}</option>)}
                   </Select>
                 </div>
               </div>
@@ -98,9 +119,9 @@ export function LeadTimeAnalysis() {
           </div>
           <div className="mt-4 h-[320px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <RechartsLineChart data={airlines.map((a) => {
+              <RechartsLineChart data={airlineFares.map((a) => {
                 const obj: Record<string, number | string> = { label: a.label }
-                LEAD_WINDOWS.forEach((w, i) => { obj[`w${w}`] = a.fares[i]! })
+                LEAD_WINDOWS.forEach((w, i) => { obj[`w${w}`] = a.fares[i] ?? 0 })
                 return obj
               })} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
               <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
@@ -111,10 +132,10 @@ export function LeadTimeAnalysis() {
               {LEAD_WINDOWS.map((w, i) => (
                 <Line key={w} type="monotone" dataKey={`w${w}`} name={`T+${w}`} stroke={['hsl(var(--primary))', 'hsl(var(--saffron))', 'hsl(var(--navy))', 'hsl(var(--muted-foreground))', 'hsl(210 100% 45%)'][i % 5]} strokeWidth={2} dot={false} isAnimationActive={false} />
               ))}
-</RechartsLineChart>
+              </RechartsLineChart>
             </ResponsiveContainer>
           </div>
-          </section>
+        </section>
 
         <section className="container-gov pb-8">
           <div className="flex flex-wrap items-end justify-between gap-3">
