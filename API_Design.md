@@ -16,21 +16,25 @@ All routes are prefixed with `/api/v1`.
 
 1. [Authentication](#1-authentication)
 2. [Rate Limiting](#2-rate-limiting)
-3. [Response Envelope](#3-response-envelope)
-4. [Error Handling](#4-error-handling)
-5. [Query Parameters & Filters](#5-query-parameters--filters)
-6. [Endpoints](#6-endpoints)
-   - [`GET /api/v1/health`](#61-health)
-   - [`GET /api/v1/admin/coverage`](#62-admin-coverage)
-   - [`GET /api/v1/apix/latest`](#63-apixlatest)
-   - [`GET /api/v1/apix/weekly`](#64-apixweekly)
-   - [`GET /api/v1/apix/monthly`](#65-apixmonthly)
-   - [`GET /api/v1/apix/by-route`](#66-apixby-route)
-   - [`GET /api/v1/apix/heatmap`](#67-apixheatmap)
-   - [`GET /api/v1/apix/elasticity`](#68-apixelasticity)
-   - [`GET /api/v1/apix/airlines`](#69-apixairlines)
-7. [Common Use-Cases](#7-common-use-cases)
-8. [Reference: Source Tables & Views](#8-reference-source-tables--views)
+3. [CORS & Preflight Configuration](#3-cors--preflight-configuration)
+4. [Response Envelope](#4-response-envelope)
+5. [Error Handling](#5-error-handling)
+6. [Query Parameters & Filters](#6-query-parameters--filters)
+7. [Endpoints](#7-endpoints)
+   - [`GET /api/v1/health`](#71-health)
+   - [`GET /api/v1/admin/metadata`](#72-admin-metadata)
+   - [`GET /api/v1/admin/coverage`](#73-admin-coverage)
+   - [`GET /api/v1/apix/latest`](#74-apixlatest)
+   - [`GET /api/v1/apix/series`](#75-apixseries)
+   - [`GET /api/v1/apix/weekly`](#76-apixweekly)
+   - [`GET /api/v1/apix/monthly`](#77-apixmonthly)
+   - [`GET /api/v1/apix/by-route`](#78-apixby-route)
+   - [`GET /api/v1/apix/heatmap`](#79-apixheatmap)
+   - [`GET /api/v1/apix/elasticity`](#710-apixelasticity)
+   - [`GET /api/v1/apix/leadtime`](#711-apixleadtime)
+   - [`GET /api/v1/apix/airlines`](#712-apixairlines)
+8. [Common Use-Cases](#8-common-use-cases)
+9. [Reference: Source Tables & Views](#9-reference-source-tables--views)
 
 ---
 
@@ -40,36 +44,40 @@ Every data endpoint requires an API key sent in the **`X-API-Key`** request head
 
 | Header | Value | Required |
 |--------|-------|----------|
-| `X-API-Key` | `web-key` / `admin-key` (whatever is configured in `API_KEYS`) | Yes * |
+| `X-API-Key` | `web-key` / `admin-key` (configured in `API_KEYS`) | Yes * |
 
 > \* `GET /api/v1/health` does **not** require an API key.
 
 Keys are configured server-side as a JSON object in the `API_KEYS` environment
-variable (e.g. `{"web-key":"web","admin-key":"admin"}`). The **value** is the
-secret sent in the header; the **label** (right-hand side) is the scope.
+variable (e.g. `{"web-key":"web","admin-key":"admin"}`). The **key** is the
+secret sent in the header; the **value** (right-hand side) is the scope.
 
 ### Scopes
 
 | Scope | Can access |
 |-------|------------|
-| `web` (any non-admin label) | All `/api/v1/apix/*` endpoints |
-| `admin` | `/api/v1/apix/*` **and** `/api/v1/admin/*` |
+| `web` (any valid non-admin key) | All `/api/v1/apix/*` endpoints **and** `GET /api/v1/admin/metadata` |
+| `admin` | All `/api/v1/apix/*` **and** all `/api/v1/admin/*` endpoints (`/admin/coverage`, `/admin/metadata`) |
 
 ### Examples
 
 ```bash
-# Public data endpoint (needs a key)
+# Public data endpoint (needs a valid web key)
 curl -H "X-API-Key: YOUR_WEB_KEY" \
   "https://smart-airfare-price-index.onrender.com/api/v1/apix/weekly"
+
+# Public metadata endpoint (accessible with web key)
+curl -H "X-API-Key: YOUR_WEB_KEY" \
+  "https://smart-airfare-price-index.onrender.com/api/v1/admin/metadata"
 
 # Missing key → 401
 curl "https://smart-airfare-price-index.onrender.com/api/v1/apix/weekly"
 
-# Admin endpoint with a web-scoped key → 403
+# Admin-restricted endpoint with a web-scoped key → 403
 curl -H "X-API-Key: YOUR_WEB_KEY" \
   "https://smart-airfare-price-index.onrender.com/api/v1/admin/coverage"
 
-# Admin endpoint with an admin key → 200
+# Admin-restricted endpoint with an admin key → 200
 curl -H "X-API-Key: YOUR_ADMIN_KEY" \
   "https://smart-airfare-price-index.onrender.com/api/v1/admin/coverage"
 ```
@@ -93,7 +101,18 @@ curl -i -H "X-API-Key: YOUR_WEB_KEY" \
 
 ---
 
-## 3. Response Envelope
+## 3. CORS & Preflight Configuration
+
+The API implements standard W3C Cross-Origin Resource Sharing (CORS) via FastAPI's `CORSMiddleware`:
+
+- **Allowed Origins:** `*` (wildcard by default for public analytics consumption) or configured via `CORS_ORIGINS_JSON` env var.
+- **Allowed Methods:** `GET`, `OPTIONS`, `HEAD`.
+- **Allowed Headers:** `*` (specifically supporting `X-API-Key`, `Authorization`, and `Content-Type`).
+- **Preflight Handling:** Browser HTTP `OPTIONS` requests are handled automatically and return `200 OK` with `Access-Control-Allow-Origin: *`.
+
+---
+
+## 4. Response Envelope
 
 Most endpoints return:
 
@@ -164,7 +183,7 @@ params per endpoint are documented in §6).
 
 ## 6. Endpoints
 
-### 6.1 `GET /api/v1/health`
+### 7.1 `GET /api/v1/health`
 
 > No API key required.
 
@@ -195,7 +214,62 @@ curl "https://smart-airfare-price-index.onrender.com/api/v1/health"
 
 ---
 
-### 6.2 `GET /api/v1/admin/coverage`
+### 7.2 `GET /api/v1/admin/metadata`
+
+> Requires a valid API key (`web` or `admin` scope).
+
+Returns global dashboard metadata: the active DGCA route basket with traffic weights, carrier registry, portals, supported advance-purchase windows, latest observation date, and history depth.
+
+**Example**
+```bash
+curl -H "X-API-Key: YOUR_WEB_KEY" \
+  "https://smart-airfare-price-index.onrender.com/api/v1/admin/metadata"
+```
+
+**Response (200)**
+```json
+{
+  "data": {
+    "routes": [
+      {
+        "code": "DEL-BOM",
+        "origin": "DEL",
+        "destination": "BOM",
+        "label": "DEL–BOM",
+        "weight_pct": 28.0
+      },
+      {
+        "code": "DEL-BLR",
+        "origin": "DEL",
+        "destination": "BLR",
+        "label": "DEL–BLR",
+        "weight_pct": 20.0
+      }
+    ],
+    "airlines": [
+      { "code": "6E", "label": "IndiGo" },
+      { "code": "AI", "label": "Air India" },
+      { "code": "IX", "label": "Air India Express" },
+      { "code": "QP", "label": "Akasa Air" },
+      { "code": "SG", "label": "SpiceJet" }
+    ],
+    "portals": ["Ixigo", "Google Flights"],
+    "lead_windows": [1, 7, 15, 30, 45],
+    "latest_date": "2026-09-06",
+    "first_date": "2026-08-30",
+    "base_period_label": "30 Aug 2026 (first scrape date)",
+    "history_days": 8
+  },
+  "meta": {
+    "count": 1,
+    "generated_at": "2026-09-07T12:00:00Z"
+  }
+}
+```
+
+---
+
+### 7.3 `GET /api/v1/admin/coverage`
 
 > Requires an **admin**-scoped API key.
 
@@ -220,16 +294,16 @@ curl -H "X-API-Key: YOUR_ADMIN_KEY" \
     {
       "journey_date": "2026-08-31",
       "source_portal": "Ixigo",
-      "quotes": 5811,
+      "quotes": 4821,
       "imputed": 0,
       "imputed_pct": 0.0
     },
     {
       "journey_date": "2026-08-31",
       "source_portal": "Google Flights",
-      "quotes": 2800,
+      "quotes": 1840,
       "imputed": 12,
-      "imputed_pct": 0.43
+      "imputed_pct": 0.65
     }
   ],
   "meta": {
@@ -241,7 +315,7 @@ curl -H "X-API-Key: YOUR_ADMIN_KEY" \
 
 ---
 
-### 6.3 `GET /api/v1/apix/latest`
+### 7.4 `GET /api/v1/apix/latest`
 
 Returns today's/recent overall APIx index history (for a sparkline) plus the
 current weighted index.
@@ -289,7 +363,44 @@ at the top level (in addition to `data` and `meta`):
 
 ---
 
-### 6.4 `GET /api/v1/apix/weekly`
+### 7.5 `GET /api/v1/apix/series`
+
+Daily continuous weighted index series for all-India or a specific route.
+
+**Query params**
+
+| Param | Type | Range | Default | Description |
+|-------|------|-------|---------|-------------|
+| `route` | string | `ALL` or `^[A-Z]{3}-[A-Z]{3}$` | `ALL` | Route filter (`ALL` or `DEL-BOM`) |
+| `days` | int | 1–730 | 60 | Number of daily points (most recent first) |
+| `portal` | string | `Ixigo`, `Google Flights` | `Ixigo` | Source portal |
+
+**Example**
+```bash
+curl -H "X-API-Key: YOUR_WEB_KEY" \
+  "https://smart-airfare-price-index.onrender.com/api/v1/apix/series?route=DEL-BOM&days=30"
+```
+
+**Response (200)**
+```json
+{
+  "data": [
+    { "date": "2026-08-30", "index_value": 87.1 },
+    { "date": "2026-08-31", "index_value": 88.4 }
+  ],
+  "meta": {
+    "portal": "Ixigo",
+    "count": 2,
+    "generated_at": "2026-09-07T12:00:00Z"
+  },
+  "available_days": 2,
+  "requested_days": 30
+}
+```
+
+---
+
+### 7.6 `GET /api/v1/apix/weekly`
 
 Weekly aggregated APIx from `view_apix_weekly` (`date_trunc('week', date)`).
 
@@ -332,7 +443,7 @@ curl -H "X-API-Key: YOUR_WEB_KEY" \
 
 ---
 
-### 6.5 `GET /api/v1/apix/monthly`
+### 7.7 `GET /api/v1/apix/monthly`
 
 Monthly aggregated APIx from `view_apix_monthly` (`date_trunc('month', date)`).
 
@@ -375,7 +486,7 @@ curl -H "X-API-Key: YOUR_WEB_KEY" \
 
 ---
 
-### 6.6 `GET /api/v1/apix/by-route`
+### 7.8 `GET /api/v1/apix/by-route`
 
 Index contribution **per route** for a specific date.
 
@@ -489,7 +600,7 @@ curl -H "X-API-Key: YOUR_WEB_KEY" \
 
 ---
 
-### 6.8 `GET /api/v1/apix/elasticity`
+### 7.10 `GET /api/v1/apix/elasticity`
 
 Day-over-day percentage change in the index for a **route + advance window**
 (lead-time elasticity), from `view_route_leadtime_elasticity`.
@@ -560,7 +671,64 @@ curl -H "X-API-Key: YOUR_WEB_KEY" \
 
 ---
 
-### 6.9 `GET /api/v1/apix/airlines`
+### 7.11 `GET /api/v1/apix/leadtime`
+
+Average, median (P50), min, max observed fare and quote counts per advance-purchase window ($T+1, T+7, T+15, T+30, T+45$) for a route.
+
+**Query params**
+
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `route` | string `^[A-Z]{3}-[A-Z]{3}$` | **Yes** | e.g. `DEL-BOM` | Route key |
+| `portal` | string | No | `Ixigo` | Source portal |
+| `limit` | int | No | 4000 (100–8000) | Recent quotes sampled |
+
+**Examples**
+```bash
+curl -H "X-API-Key: YOUR_WEB_KEY" \
+  "https://smart-airfare-price-index.onrender.com/api/v1/apix/leadtime?route=DEL-BOM"
+```
+
+**Response (200)**
+```json
+{
+  "data": [
+    {
+      "advance_windows": 1,
+      "avg_fare": 8450.00,
+      "p50_fare": 8200.00,
+      "min_fare": 5200.00,
+      "max_fare": 14500.00,
+      "observations": 240
+    },
+    {
+      "advance_windows": 7,
+      "avg_fare": 6120.00,
+      "p50_fare": 5900.00,
+      "min_fare": 4300.00,
+      "max_fare": 11200.00,
+      "observations": 310
+    },
+    {
+      "advance_windows": 30,
+      "avg_fare": 4250.00,
+      "p50_fare": 4100.00,
+      "min_fare": 3400.00,
+      "max_fare": 7500.00,
+      "observations": 450
+    }
+  ],
+  "meta": {
+    "portal": "Ixigo",
+    "count": 3,
+    "generated_at": "2026-09-07T12:00:00Z"
+  }
+}
+```
+
+---
+
+### 7.12 `GET /api/v1/apix/airlines`
 
 Average/min fare per airline on a **route + journey date** (from `flight_quotes`).
 
@@ -611,18 +779,18 @@ fare ascending. `carrier_code` is `null` for Google Flights.
 ```
 
 > To get **average** fare per airline, aggregate client-side or use PostgREST directly
-> (see §8). The endpoint returns per-flight rows ordered by fare.
+> (see §9). The endpoint returns per-flight rows ordered by fare.
 
 ---
 
-## 7. Common Use-Cases
+## 8. Common Use-Cases
 
-### Dashboard sparkline (weekly trend)
+### Dashboard sparkline & continuous series
 ```bash
 curl -H "X-API-Key: YOUR_WEB_KEY" \
   "https://smart-airfare-price-index.onrender.com/api/v1/apix/latest"
 curl -H "X-API-Key: YOUR_WEB_KEY" \
-  "https://smart-airfare-price-index.onrender.com/api/v1/apix/weekly?limit=52"
+  "https://smart-airfare-price-index.onrender.com/api/v1/apix/series?route=ALL&days=60"
 ```
 
 ### Price heatmap for today (all routes × windows)
@@ -647,6 +815,12 @@ curl -H "X-API-Key: YOUR_WEB_KEY" \
   "https://smart-airfare-price-index.onrender.com/api/v1/apix/elasticity?route=DEL-BOM&window=45&limit=30"
 ```
 
+### Advance-purchase price curve
+```bash
+curl -H "X-API-Key: YOUR_WEB_KEY" \
+  "https://smart-airfare-price-index.onrender.com/api/v1/apix/leadtime?route=DEL-BOM"
+```
+
 ### Cheapest airline on a route for a departure date
 ```bash
 curl -H "X-API-Key: YOUR_WEB_KEY" \
@@ -666,7 +840,7 @@ curl -H "X-API-Key: YOUR_ADMIN_KEY" \
 
 ---
 
-## 8. Reference: Source Tables & Views
+## 9. Reference: Source Tables & Views
 
 The API reads from the following Supabase objects. The column names in responses
 come directly from these objects.

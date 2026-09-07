@@ -84,18 +84,24 @@ mathematics and `ROADMAP.md` for the implementation status.
 ## Build & Test Commands
 
 ```bash
-# Install dependencies
+# Backend dependencies & testing
 pip install -r requirements.txt
 playwright install chromium
-
-# Run the system
-python main.py
-
-# Run tests
 pytest tests/ -v
 
-# Run specific test
-pytest tests/test_compliance.py -v
+# Run the ingestion & indexing pipeline
+python main.py
+
+# Run API server locally
+uvicorn src.api.main:app --port 8000 --reload
+
+# Frontend dependencies, testing & build
+cd frontend
+npm install
+npm run test         # Vitest test suite with coverage
+npm run lint         # ESLint (0 warnings allowed)
+npm run build        # TypeScript typecheck + Vite production bundle
+npm run dev          # Local development server (http://localhost:5173)
 ```
 
 ## Repository Structure
@@ -111,7 +117,34 @@ Airfare Price Fetcher/
 │   └── indices/               # Computed indices
 ├── docs/
 │   ├── portal-analysis/       # Portal research & response structures
-│   └── DATA_SCHEMA_AND_EXTRACTION_SPEC.md  # Canonical schema + Supabase DDL
+│   ├── API_FRONTEND_INTEGRATION.md              # Full-stack integration reference
+│   ├── FRONTEND_ARCHITECTURE.md                 # Frontend architecture, data layer & state
+│   ├── FRONTEND_PAGES_AND_ANALYTICS_SPEC.md     # Specifications for all 10 dashboard pages
+│   ├── FRONTEND_MAP_SEARCH_AND_DESIGN_SYSTEM.md # Cartography math, smart search, design system
+│   ├── DEPLOYMENT_AND_OPERATIONS.md             # Render deployment, Docker, CI/CD, operations
+│   └── DATA_SCHEMA_AND_EXTRACTION_SPEC.md       # Canonical schema + Supabase DDL
+├── frontend/                  # React 18 + TypeScript + Vite + Tailwind dashboard
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── charts/        # Recharts wrappers (Line, Bar, Heatmap)
+│   │   │   ├── data/          # Data UX (LimitedHistoryBanner, loading states)
+│   │   │   ├── layout/        # Header, Footer, navigation
+│   │   │   ├── map/           # IndiaMap SVG vector map, MapTooltip
+│   │   │   ├── mode-toggle/   # Prototype vs Live API switcher
+│   │   │   ├── search/        # Smart RouteSearchInput & fuzzy routeSearchUtils
+│   │   │   └── ui/            # Design system primitives (Card, Table, Select, Button, Modal)
+│   │   ├── hooks/             # useDataProvider, useMetadata, useTheme
+│   │   ├── lib/
+│   │   │   ├── build/         # buildProvider (Live REST API with session cache & fallbacks)
+│   │   │   ├── computations/  # Shared mathematical & aggregation algorithms
+│   │   │   ├── map/           # geo.ts (Survey of India projection & compound paths)
+│   │   │   ├── prototype/     # prototypeProvider (Deterministic simulated data engine)
+│   │   │   └── types.ts       # Canonical TypeScript response models & DataProvider interface
+│   │   ├── mocks/             # MSW mock handlers for testing
+│   │   ├── pages/             # 10 dashboard pages (Home, AirfareIndex, RouteAnalytics, etc.)
+│   │   └── test/              # Vitest test setup, render helpers, observer mocks
+│   ├── vite.config.ts         # Vite configuration with /api/v1 proxy
+│   └── package.json           # Frontend dependencies & scripts
 ├── src/
 │   ├── ingestion/
 │   │   ├── interceptors/
@@ -142,9 +175,9 @@ Airfare Price Fetcher/
 │   │   ├── dependencies.py    # Supabase httpx client + API key auth
 │   │   ├── models.py          # Pydantic response models
 │   │   └── routes/
-│   │       ├── apix.py        # /apix/* endpoints (latest, weekly, monthly, ...)
-│   │       └── health.py      # /health + /admin/coverage
-│   └── dashboard/             # Streamlit dashboard (deferred - not built)
+│   │       ├── apix.py        # /apix/* endpoints (latest, series, weekly, monthly, ...)
+│   │       └── health.py      # /health, /admin/coverage, /admin/metadata
+│   └── dashboard/             # Legacy Streamlit prototype (superseded by React frontend)
 ├── tests/                     # pytest test suite
 ├── storage/                   # Token cache (JSON)
 ├── opencode.json              # MCP server config (Supabase)
@@ -152,9 +185,10 @@ Airfare Price Fetcher/
 ├── requirements.txt
 ├── main.py
 ├── api.Dockerfile             # API container image (binds $PORT)
-├── render.yaml                # Render Blueprint (API Web Service)
+├── render.yaml                # Render Blueprint (API Web Service + Static Site)
 ├── ROADMAP.md                 # Detailed phase plan
-├── API_Design.md             # Full API reference + abundant curl examples
+├── METHODOLOGY.md             # Mathematical index construction specification
+├── API_Design.md              # Full API reference + curl examples
 └── AGENTS.md                  # This file
 ```
 
