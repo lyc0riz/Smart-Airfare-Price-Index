@@ -9,8 +9,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
-dist/
-build/
+/dist/
+/build/
 *.egg
 
 # DuckDB (legacy)
