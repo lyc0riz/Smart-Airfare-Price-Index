@@ -42,6 +42,7 @@ playwright-report/
 #session files
 session-ses_fc28.md
 session-v01.md
+session-ses_fa42.md
 
 # Frontend (Node)
 frontend/node_modules/
@@ -69,3 +70,4 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
