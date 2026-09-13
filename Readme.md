@@ -249,3 +249,10 @@ Developed in alignment with research guidelines for the **Ministry of Statistics
 * **Transparent Identification:** Every network request broadcasts an institutional research identity via a structured header:
   ```http
   User-Agent: MoSPI-APIx-Research-Bot/1.0 (+[https://mospi.gov.in/cpi](https://mospi.gov.in/cpi); rate-limited; research-use)
+  
+---
+
+## 📜 License & Citation
+
+Developed for the **Ministry of Statistics and Programme Implementation (MoSPI)**, Government of India.  
+Data provided for research, monitoring, and index development under the **Data Informatics & Innovation Division (DIID)**.
