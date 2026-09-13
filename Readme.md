@@ -66,6 +66,32 @@ With over **90% of domestic air tickets in India booked digitally**, airline pri
 │  (Read-Only Session & Execution Limits)   │◄──────────────┤   (Local Qwen2.5-Coder SLM via Ollama)    │
 └───────────────────────────────────────────┘               └───────────────────────────────────────────┘
 ```
+📁 Repository Structure & Deployment
+```
+.
+├── .github/workflows/                          # CI/CD Automation
+│   ├── api-deploy.yml                          # Auto-deployment triggers for backend
+│   └── daily-pipeline.yml                      # Cron jobs for daily automated web scraping
+├── config/                                     # Parameter matrices and route weights
+├── docs/                                       # Extended system documentation
+├── frontend/                                   # React 18 + Vite 5 Dashboard source code
+├── scripts/                                    # Utility and database migration scripts
+├── src/                                        # Core Python Backend (FastAPI, Scrapers, Engine)
+├── storage/                                    # Local persistence and log storage
+├── tests/                                      # Pytest suites for statistical methodologies
+├── AGENTS.md                                   # Multi-Agent Architectural Roles
+├── API_Design.md                               # REST API specifications
+├── Dockerfile                                  # Backend container configuration
+├── frontend.Dockerfile                         # Frontend static delivery container
+├── METHODOLOGY.md                              # Mathematical Index formulations
+├── Readme.md                                   # Overall Structure
+├── ROADMAP.md                                  # Delivery milestones and scaling
+├── SECRETS.md                                  # Environment and security configurations
+├── render.yaml                                 # Infrastructure-as-Code for Render deployment
+├── opencode.json                               # Project metadata 
+├── main.py                                     # Pipeline orchestrator entrypoint
+└── requirements.txt                            # Python dependencies
+```
 ### 1. Elementary Cell Aggregation (Jevons Formula)
 
 For each elementary cell $c = (\text{origin}, \text{destination}, \text{advance-window})$, the unweighted daily price is calculated using the geometric mean of observed quotes:
