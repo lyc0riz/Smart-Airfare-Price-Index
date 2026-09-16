@@ -1,13 +1,13 @@
 import { cn } from '../../lib/utils'
 
-interface HeatmapCell {
+export interface HeatmapCell {
   route: string
   window: number
   value: number
   label?: string
 }
 
-interface HeatmapProps {
+export interface HeatmapProps {
   data: HeatmapCell[]
   routes: string[]
   windows: number[]

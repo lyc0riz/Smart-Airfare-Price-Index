@@ -197,6 +197,28 @@ export interface LeadTimeData {
   airlines: { code: string; label: string; fares: number[]; spread: number }[]
 }
 
+export interface NLQResponse {
+  query: string
+  sql: string
+  summary: string
+  columns: string[]
+  table: Record<string, unknown>[]
+  row_count: number
+  execution_time_ms: number
+  model_used: string
+  meta: Meta
+}
+
+export interface SqlQueryResponse {
+  sql: string
+  columns: string[]
+  table: Record<string, unknown>[]
+  row_count: number
+  execution_time_ms: number
+  status: 'SUCCESS' | 'ERROR' | 'BLOCKED'
+  error_message?: string
+}
+
 export interface DataProvider {
   getLatestIndex(portal: string): Promise<LatestIndexResponse>
   getWeeklyIndex(portal: string, limit: number): Promise<WeeklyIndexResponse>
@@ -233,6 +255,8 @@ export interface DataProvider {
     end: string,
     airlineCode: string
   ): Promise<DataResponse<BacktestResult>>
+  queryNaturalLanguage(query: string, portal?: string): Promise<NLQResponse>
+  executeSqlQuery(sql: string): Promise<SqlQueryResponse>
 }
 
 export type {
