@@ -9,8 +9,8 @@ export interface HeatmapCell {
 
 export interface HeatmapProps {
   data: HeatmapCell[]
-  routes: string[]
-  windows: number[]
+  routes: readonly string[] | string[]
+  windows: readonly number[] | number[]
   height?: number
   className?: string
   onCellClick?: (cell: HeatmapCell) => void
