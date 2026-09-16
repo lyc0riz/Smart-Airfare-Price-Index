@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { LineChart as RechartsLineChart, Line, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend } from 'recharts'
-import { Info } from 'lucide-react'
+import { Info, Grid, Layers } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import { Select } from '../components/ui/Select'
 import { Table } from '../components/ui/Table'
+import { Heatmap, type HeatmapCell } from '../components/charts/Heatmap'
 import { formatINR, pct } from '../lib/utils'
-import { LEAD_WINDOWS, TRAVEL_DATE_AVAILABLE, OBSERVATION_PERIOD, type WindowStat } from '../lib/prototype/leadtime'
+import { LEAD_WINDOWS, TRAVEL_DATE_AVAILABLE, OBSERVATION_PERIOD, routeLeadTime, type WindowStat } from '../lib/prototype/leadtime'
 import { cn } from '../lib/utils'
 import { useDataProvider } from '../hooks/useDataProvider'
 import { useMetadata } from '../hooks/useMetadata'
@@ -23,6 +24,9 @@ export function LeadTimeAnalysis() {
   const [airlineFares, setAirlineFares] = useState<{ code: string; label: string; fares: number[]; spread: number }[]>([])
   const [warning, setWarning] = useState<string | undefined>()
 
+  const [selectedCell, setSelectedCell] = useState<HeatmapCell | null>(null)
+  const [heatmapMode, setHeatmapMode] = useState<'fare' | 'index'>('fare')
+
   useEffect(() => {
     let cancelled = false
     provider.getLeadTimeData(routeCode, airlineCode).then((res) => {
@@ -36,6 +40,27 @@ export function LeadTimeAnalysis() {
     })
     return () => { cancelled = true }
   }, [provider, routeCode, airlineCode])
+
+  const routeLeadRows = useMemo(() => routeLeadTime(routeCode, airlineCode), [routeCode, airlineCode])
+  const heatmapRoutes = useMemo(() => routeLeadRows.map((r) => r.code), [routeLeadRows])
+
+  const heatmapCells = useMemo<HeatmapCell[]>(() => {
+    const cells: HeatmapCell[] = []
+    routeLeadRows.forEach((r) => {
+      const t30Fare = r.fares[3] || 1
+      r.fares.forEach((fare, wi) => {
+        const windowVal = LEAD_WINDOWS[wi]!
+        const val = heatmapMode === 'fare' ? fare : Math.round((fare / t30Fare) * 1000) / 10
+        cells.push({
+          route: r.code,
+          window: windowVal,
+          value: val,
+          label: heatmapMode === 'fare' ? `₹${fare}` : `Idx ${val}`,
+        })
+      })
+    })
+    return cells
+  }, [routeLeadRows, heatmapMode])
 
   const maxWindow = Math.max(...LEAD_WINDOWS)
 
@@ -135,6 +160,99 @@ export function LeadTimeAnalysis() {
               </RechartsLineChart>
             </ResponsiveContainer>
           </div>
+        </section>
+
+        {/* Heatmap Matrix Section */}
+        <section className="container-gov pb-8">
+          <Card className="p-4 md:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-border">
+              <div>
+                <h2 className="flex items-center gap-2 text-lg font-semibold text-foreground">
+                  <Grid className="h-5 w-5 text-primary" aria-hidden="true" />
+                  Route × Lead-Time Heatmap Matrix
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Interactive pricing matrix across routes and advance booking windows (Click any cell for details).
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground font-medium">Metric:</span>
+                <div className="inline-flex rounded-sm border border-border bg-muted p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setHeatmapMode('fare')}
+                    className={cn(
+                      'px-2.5 py-1 text-xs font-medium rounded-sm transition-colors',
+                      heatmapMode === 'fare' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    Average Fare (₹)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHeatmapMode('index')}
+                    className={cn(
+                      'px-2.5 py-1 text-xs font-medium rounded-sm transition-colors',
+                      heatmapMode === 'index' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    Index Relative (T+30 = 100)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 overflow-x-auto">
+              <Heatmap
+                data={heatmapCells}
+                routes={heatmapRoutes}
+                windows={LEAD_WINDOWS}
+                onCellClick={(cell) => setSelectedCell(cell)}
+                height={380}
+              />
+            </div>
+
+            {/* Selected Cell Comparative Breakdown */}
+            {selectedCell && (
+              <div className="mt-4 rounded-sm border border-primary/30 bg-primary/5 p-4 transition-all">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-primary/20 pb-2">
+                  <span className="text-xs font-semibold uppercase tracking-[0.1em] text-primary flex items-center gap-1.5">
+                    <Layers className="h-3.5 w-3.5" />
+                    Selected Cell Breakdown: {selectedCell.route} (T+{selectedCell.window})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCell(null)}
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    ✕ Close
+                  </button>
+                </div>
+                <div className="mt-3 grid gap-4 sm:grid-cols-3">
+                  <div>
+                    <span className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">Route & Window</span>
+                    <p className="mt-1 text-base font-bold text-foreground">{selectedCell.route} · T+{selectedCell.window} Days</p>
+                  </div>
+                  <div>
+                    <span className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">Observed Value</span>
+                    <p className="mt-1 text-base font-bold text-foreground">
+                      {heatmapMode === 'fare' ? formatINR(selectedCell.value) : `Index ${selectedCell.value.toFixed(1)}`}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">Booking Window Impact</span>
+                    <p className="mt-1 text-sm font-medium text-foreground">
+                      {selectedCell.window <= 7
+                        ? '🔥 High Close-in Booking Premium'
+                        : selectedCell.window >= 30
+                        ? '🟢 Discounted Advance Purchase Window'
+                        : '⚡ Standard Mid-Range Booking Window'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </Card>
         </section>
 
         <section className="container-gov pb-8">
