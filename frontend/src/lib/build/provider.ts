@@ -16,6 +16,8 @@ import type {
   RouteIntel,
   LeadTimeData,
   BacktestResult,
+  NLQResponse,
+  SqlQueryResponse,
 } from '../types'
 import { prototypeProvider } from '../prototype/provider'
 
@@ -287,6 +289,56 @@ export const buildProvider: DataProvider = {
       const response = makeResponse(data, { portal: 'Ixigo', count: 0, generated_at: new Date().toISOString() })
       response.warning = 'Backtest requires historical daily series not yet available live'
       return response
+    }
+  },
+
+  async queryNaturalLanguage(query: string, portal: string = 'Ixigo'): Promise<NLQResponse> {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 2500)
+    try {
+      const url = `${API_BASE}/query`
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'X-API-Key': API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query, portal }),
+        signal: controller.signal,
+      })
+      clearTimeout(timeoutId)
+      if (!response.ok) {
+        throw new Error(`API returned ${response.status}`)
+      }
+      return (await response.json()) as NLQResponse
+    } catch {
+      clearTimeout(timeoutId)
+      return prototypeProvider.queryNaturalLanguage(query, portal)
+    }
+  },
+
+  async executeSqlQuery(sql: string): Promise<SqlQueryResponse> {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 2500)
+    try {
+      const url = `${API_BASE}/sql`
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'X-API-Key': API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ sql }),
+        signal: controller.signal,
+      })
+      clearTimeout(timeoutId)
+      if (!response.ok) {
+        throw new Error(`API returned ${response.status}`)
+      }
+      return (await response.json()) as SqlQueryResponse
+    } catch {
+      clearTimeout(timeoutId)
+      return prototypeProvider.executeSqlQuery(sql)
     }
   },
 }

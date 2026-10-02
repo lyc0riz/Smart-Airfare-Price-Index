@@ -7,6 +7,8 @@ import {
 import { routeIntel } from './route-intel'
 import { windowStats, airlineLeadTime, leadCurve } from './leadtime'
 import { runBacktest } from './backtest'
+import { simulateNLQ } from './nlq-engine'
+import { executeSql } from './sql-engine'
 import type {
   DataProvider,
   DataResponse,
@@ -24,6 +26,8 @@ import type {
   ElasticityResponse,
   AirlinesResponse,
   CoverageResponse,
+  NLQResponse,
+  SqlQueryResponse,
 } from '../types'
 
 function hash(n: number): number {
@@ -332,5 +336,13 @@ export const prototypeProvider: DataProvider = {
   ): Promise<DataResponse<BacktestResult>> {
     const result = runBacktest(start, end, airlineCode)
     return makeResponse(result)
+  },
+
+  async queryNaturalLanguage(query: string, portal: string = 'Ixigo'): Promise<NLQResponse> {
+    return simulateNLQ(query, portal)
+  },
+
+  async executeSqlQuery(sql: string): Promise<SqlQueryResponse> {
+    return executeSql(sql)
   },
 }

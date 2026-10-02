@@ -17,6 +17,7 @@ const Backtesting = lazy(() => import('./pages/Backtesting').then((m) => ({ defa
 const DataExplorer = lazy(() => import('./pages/DataExplorer').then((m) => ({ default: m.DataExplorer })))
 const DataQuality = lazy(() => import('./pages/DataQuality').then((m) => ({ default: m.DataQuality })))
 const DataSources = lazy(() => import('./pages/DataSources').then((m) => ({ default: m.DataSources })))
+const QueryExplorer = lazy(() => import('./pages/QueryExplorer').then((m) => ({ default: m.QueryExplorer })))
 const AboutApix = lazy(() => import('./pages/AboutApix').then((m) => ({ default: m.AboutApix })))
 const ApiDocs = lazy(() => import('./pages/ApiDocs').then((m) => ({ default: m.ApiDocs })))
 
@@ -49,6 +50,8 @@ function App() {
               <Route path="/lead-time" element={<PageOutlet><LeadTimeAnalysis /></PageOutlet>} />
               <Route path="/backtesting" element={<PageOutlet><Backtesting /></PageOutlet>} />
               <Route path="/data-explorer" element={<PageOutlet><DataExplorer /></PageOutlet>} />
+              <Route path="/query-explorer" element={<PageOutlet><QueryExplorer /></PageOutlet>} />
+              <Route path="/query" element={<PageOutlet><QueryExplorer /></PageOutlet>} />
               <Route path="/data-quality" element={<PageOutlet><DataQuality /></PageOutlet>} />
               <Route path="/data-sources" element={<PageOutlet><DataSources /></PageOutlet>} />
               <Route path="/about-apix" element={<PageOutlet><AboutApix /></PageOutlet>} />
